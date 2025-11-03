@@ -437,7 +437,12 @@ async def show_all_users(message: types.Message, state: FSMContext):
         if user['referrer_id']:
             referrer = db.get_user(user['referrer_id'])
             if referrer:
-                referrer_text = f"   👥 Пригласил: {referrer['full_name']}\n"
+                username = f"@{referrer['username']}" if referrer['username'] else "нет username"
+                referrer_text = (
+                    f"   👥 Пригласил: {referrer['full_name']}\n"
+                    f"      ID: <code>{referrer['user_id']}</code>\n"
+                    f"      @{username}\n"
+                )
         
         users_text += (
             f"{emoji} <b>{user['full_name']}</b>\n"
