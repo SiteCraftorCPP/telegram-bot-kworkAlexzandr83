@@ -251,15 +251,12 @@ async def process_photo(message: types.Message, state: FSMContext):
         await send_notification_to_channel(user_id, message.bot)
         
         # Отправляем информацию о реферальной программе
-        orders_required = DOCUMENT_REQUIREMENTS[category]["orders_required"]
         referral_text = (
             f"🎉 <b>Регистрация успешно завершена!</b>\n\n"
             f"💰 <b>Зарабатывайте с нами!</b>\n\n"
             f"Приглашайте друзей и получайте бонусы:\n"
             f"• <b>1000 руб</b> — вам за каждого приглашённого\n"
             f"• <b>500 руб</b> — вашему другу\n\n"
-            f"📋 Условия:\n"
-            f"Ваш друг должен выполнить <b>{orders_required} заказов</b> в категории {DOCUMENT_REQUIREMENTS[category]['emoji']} {DOCUMENT_REQUIREMENTS[category]['name']}\n\n"
             f"Используйте кнопку <b>\"👥 Пригласить друзей\"</b> для получения вашей реферальной ссылки!"
         )
         
@@ -350,19 +347,15 @@ async def show_referral_link(message: types.Message, state: FSMContext):
         return
     
     stats = db.get_user_stats(user_id)
-    category = user['category']
-    orders_required = DOCUMENT_REQUIREMENTS[category]['orders_required']
     
     referral_text = (
         f"🔗 <b>Ваша реферальная ссылка:</b>\n"
         f"<code>{referral_link}</code>\n\n"
         f"📊 <b>Статистика:</b>\n"
-        f"👥 Приглашено: {stats['invited_count']}\n"
-        f"✅ Выполнили условия: {stats['completed_count']}\n\n"
-        f"💰 <b>Условия:</b>\n"
+        f"👥 Приглашено: {stats['invited_count']}\n\n"
+        f"💰 <b>Бонусы:</b>\n"
         f"• 1000 руб — вам\n"
-        f"• 500 руб — другу\n"
-        f"• Нужно выполнить {orders_required} заказов\n\n"
+        f"• 500 руб — другу\n\n"
         f"Отправьте ссылку своим друзьям!"
     )
     
@@ -382,25 +375,22 @@ async def show_profile(message: types.Message, state: FSMContext):
     referrals = db.get_referrals(user_id)
     stats = db.get_user_stats(user_id)
     category_info = DOCUMENT_REQUIREMENTS[user['category']]
-    orders_required = category_info['orders_required']
     
     profile_text = (
         f"👤 <b>Ваш профиль</b>\n\n"
         f"📛 Имя: {user['full_name']}\n"
         f"{category_info['emoji']} Категория: {category_info['name']}\n"
         f"📅 Регистрация: {user['created_at'][:10]}\n\n"
-        f"👥 <b>Приглашённые:</b> {stats['invited_count']}\n"
-        f"✅ <b>Выполнили условия:</b> {stats['completed_count']}\n\n"
+        f"👥 <b>Приглашённые:</b> {stats['invited_count']}\n\n"
     )
     
     if referrals:
         profile_text += "<b>📋 Список приглашённых:</b>\n\n"
         for ref in referrals[:10]:  # Показываем первые 10
-            status_emoji = "✅" if ref['orders_count'] >= orders_required else "⏳"
             profile_text += (
-                f"{status_emoji} {ref['full_name']}\n"
-                f"   Заказов: {ref['orders_count']}/{orders_required}\n"
-                f"   Бонус: {'Выплачен' if ref['bonus_paid'] else 'Ожидается'}\n\n"
+                f"👤 {ref['full_name']}\n"
+                f"   @{ref['username'] if ref['username'] else 'нет username'}\n"
+                f"   📅 {ref['created_at'][:10]}\n\n"
             )
     
     await message.answer(profile_text, parse_mode="HTML")
