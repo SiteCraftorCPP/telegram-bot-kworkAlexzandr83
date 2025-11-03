@@ -453,6 +453,55 @@ async def show_all_users(message: types.Message, state: FSMContext):
     await message.answer(users_text, parse_mode="HTML")
 
 
+@dp.message_handler(lambda message: message.text == "📈 Статистика", state="*")
+async def show_statistics(message: types.Message, state: FSMContext):
+    """Показать статистику"""
+    user_id = message.from_user.id
+    
+    if not db.is_admin(user_id):
+        await message.answer("У вас нет прав администратора")
+        return
+    
+    users = db.get_all_users()
+    
+    # Подсчитываем статистику
+    total_users = len(users)
+    
+    # Статистика по категориям
+    categories = {}
+    referrals_count = 0
+    
+    for user in users:
+        category = user.get('category', 'unknown')
+        categories[category] = categories.get(category, 0) + 1
+        
+        if user.get('referrer_id'):
+            referrals_count += 1
+    
+    stats_text = (
+        f"📈 <b>Общая статистика</b>\n\n"
+        f"👥 <b>Всего пользователей:</b> {total_users}\n"
+        f"🔗 <b>Зарегистрировано по реферальным ссылкам:</b> {referrals_count}\n\n"
+        f"📊 <b>По категориям:</b>\n"
+    )
+    
+    for category, count in categories.items():
+        category_info = DOCUMENT_REQUIREMENTS.get(category, {})
+        emoji = category_info.get('emoji', '❓')
+        name = category_info.get('name', category)
+        stats_text += f"{emoji} {name}: {count}\n"
+    
+    # Статистика рефералов
+    total_referrals = 0
+    for user in users:
+        refs = db.get_referrals(user['user_id'])
+        total_referrals += len(refs)
+    
+    stats_text += f"\n👥 <b>Всего приглашено:</b> {total_referrals}"
+    
+    await message.answer(stats_text, parse_mode="HTML")
+
+
 @dp.message_handler(lambda message: message.text == "◀️ Назад", state="*")
 async def go_back(message: types.Message, state: FSMContext):
     """Вернуться в главное меню"""
