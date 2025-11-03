@@ -27,3 +27,9 @@ Thumbs.db
 # Server files
 *.session
 .python_history
+
+# Database
+*.db
+*.db-journal
+bot_old_backup.py
+bot_new.py
