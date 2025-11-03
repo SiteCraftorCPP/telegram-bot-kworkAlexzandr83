@@ -228,6 +228,10 @@ async def process_photo(message: types.Message, state: FSMContext):
         # НЕ отправляем промежуточное сообщение
         pass
     else:
+        # Проверяем, не был ли уже сохранён пользователь (защита от дублирования)
+        if user_data[user_id].get("registered", False):
+            return  # Пользователь уже зарегистрирован, игнорируем повторную отправку
+        
         # Все документы собраны
         await message.answer(
             "✅ Все документы получены!\n"
@@ -246,6 +250,9 @@ async def process_photo(message: types.Message, state: FSMContext):
             category=category,
             referrer_id=referrer_id
         )
+        
+        # Отмечаем, что пользователь зарегистрирован
+        user_data[user_id]["registered"] = True
         
         # Отправляем уведомление в канал
         await send_notification_to_channel(user_id, message.bot)

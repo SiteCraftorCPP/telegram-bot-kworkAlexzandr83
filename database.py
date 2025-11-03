@@ -39,6 +39,7 @@ class Database:
             orders_count INTEGER DEFAULT 0,
             bonus_paid INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(referrer_id, referred_id),
             FOREIGN KEY (referrer_id) REFERENCES users(user_id),
             FOREIGN KEY (referred_id) REFERENCES users(user_id)
         )
@@ -70,10 +71,10 @@ class Database:
             VALUES (?, ?, ?, ?, ?, ?)
             """, (user_id, username, full_name, first_name, category, referrer_id))
             
-            # Если есть реферер, добавляем запись в таблицу рефералов
+            # Если есть реферер, добавляем запись в таблицу рефералов (без дубликатов)
             if referrer_id:
                 cursor.execute("""
-                INSERT INTO referrals (referrer_id, referred_id)
+                INSERT OR IGNORE INTO referrals (referrer_id, referred_id)
                 VALUES (?, ?)
                 """, (referrer_id, user_id))
             
