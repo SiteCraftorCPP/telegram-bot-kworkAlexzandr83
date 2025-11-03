@@ -251,10 +251,6 @@ async def process_photo(message: types.Message, state: FSMContext):
         await send_notification_to_channel(user_id, message.bot)
         
         # Отправляем информацию о реферальной программе
-        orders_required = DOCUMENT_REQUIREMENTS[category]["orders_required"]
-        category_emoji = DOCUMENT_REQUIREMENTS[category]['emoji']
-        category_name = DOCUMENT_REQUIREMENTS[category]['name']
-        
         referral_text = (
             f"🎉 <b>Регистрация успешно завершена!</b>\n\n"
             f"💰 <b>Зарабатывайте с нами!</b>\n\n"
@@ -262,7 +258,7 @@ async def process_photo(message: types.Message, state: FSMContext):
             f"• <b>1000 руб</b> — вам за каждого приглашённого\n"
             f"• <b>500 руб</b> — вашему другу\n\n"
             f"📋 <b>Условие выплаты:</b>\n"
-            f"Ваш друг должен выполнить <b>{orders_required} заказов</b> в категории {category_emoji} {category_name}\n\n"
+            f"При условии выполнении <b>45 заказов экспресс</b> и <b>30 заказов в грузовом</b>\n\n"
             f"Используйте кнопку <b>\"👥 Пригласить друзей\"</b> для получения вашей реферальной ссылки!"
         )
         
@@ -353,10 +349,6 @@ async def show_referral_link(message: types.Message, state: FSMContext):
         return
     
     stats = db.get_user_stats(user_id)
-    category = user['category']
-    orders_required = DOCUMENT_REQUIREMENTS[category]['orders_required']
-    category_emoji = DOCUMENT_REQUIREMENTS[category]['emoji']
-    category_name = DOCUMENT_REQUIREMENTS[category]['name']
     
     referral_text = (
         f"🔗 <b>Ваша реферальная ссылка:</b>\n"
@@ -367,7 +359,7 @@ async def show_referral_link(message: types.Message, state: FSMContext):
         f"• 1000 руб — вам\n"
         f"• 500 руб — другу\n\n"
         f"📋 <b>Условие выплаты:</b>\n"
-        f"При условии выполнения <b>{orders_required} заказов</b> в категории {category_emoji} {category_name}\n\n"
+        f"При условии выполнении <b>45 заказов экспресс</b> и <b>30 заказов в грузовом</b>\n\n"
         f"Отправьте ссылку своим друзьям!"
     )
     
