@@ -1,0 +1,16 @@
+[Unit]
+Description=Order Checker Service for Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/tgbotkworkAlexzandr83
+Environment="PATH=/usr/bin:/usr/local/bin"
+ExecStart=/usr/bin/python3 /root/tgbotkworkAlexzandr83/order_checker.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
