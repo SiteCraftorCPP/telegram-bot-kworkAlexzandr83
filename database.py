@@ -23,10 +23,14 @@ class Database:
             username TEXT,
             full_name TEXT,
             first_name TEXT,
+            phone_number TEXT,
             category TEXT,
             referrer_id INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            is_admin INTEGER DEFAULT 0
+            is_admin INTEGER DEFAULT 0,
+            is_registered_in_park INTEGER DEFAULT 0,
+            yandex_driver_id TEXT,
+            yandex_driver_name TEXT
         )
         """)
         
@@ -60,23 +64,32 @@ class Database:
         conn.close()
     
     def add_user(self, user_id: int, username: str, full_name: str, 
-                 first_name: str, category: str, referrer_id: Optional[int] = None):
+                 first_name: str, phone_number: str, category: str = None, 
+                 referrer_id: Optional[int] = None, is_registered_in_park: bool = False,
+                 yandex_driver_id: str = None, yandex_driver_name: str = None):
         """Добавление нового пользователя"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         try:
             cursor.execute("""
-            INSERT OR IGNORE INTO users (user_id, username, full_name, first_name, category, referrer_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """, (user_id, username, full_name, first_name, category, referrer_id))
+            INSERT OR IGNORE INTO users (user_id, username, full_name, first_name, phone_number, 
+                                        category, referrer_id, is_registered_in_park, 
+                                        yandex_driver_id, yandex_driver_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, username, full_name, first_name, phone_number, category, 
+                  referrer_id, 1 if is_registered_in_park else 0, yandex_driver_id, yandex_driver_name))
             
-            # Если есть реферер, добавляем запись в таблицу рефералов (без дубликатов)
-            if referrer_id:
+            # Если есть реферер И пользователь НЕ зарегистрирован в парке, добавляем запись в таблицу рефералов
+            # (пользователи, уже зарегистрированные в парке, не учитываются как рефералы)
+            if referrer_id and not is_registered_in_park:
                 cursor.execute("""
                 INSERT OR IGNORE INTO referrals (referrer_id, referred_id)
                 VALUES (?, ?)
                 """, (referrer_id, user_id))
+                logging.info(f"Добавлен реферал: referrer_id={referrer_id}, referred_id={user_id}")
+            elif referrer_id and is_registered_in_park:
+                logging.info(f"Реферал не добавлен (пользователь уже в парке): referrer_id={referrer_id}, referred_id={user_id}")
             
             conn.commit()
             return True
@@ -92,7 +105,8 @@ class Database:
         cursor = conn.cursor()
         
         cursor.execute("""
-        SELECT user_id, username, full_name, category, referrer_id, created_at, is_admin
+        SELECT user_id, username, full_name, phone_number, category, referrer_id, 
+               created_at, is_admin, is_registered_in_park, yandex_driver_id, yandex_driver_name
         FROM users WHERE user_id = ?
         """, (user_id,))
         
@@ -104,12 +118,70 @@ class Database:
                 "user_id": row[0],
                 "username": row[1],
                 "full_name": row[2],
-                "category": row[3],
-                "referrer_id": row[4],
-                "created_at": row[5],
-                "is_admin": row[6]
+                "phone_number": row[3],
+                "category": row[4],
+                "referrer_id": row[5],
+                "created_at": row[6],
+                "is_admin": row[7],
+                "is_registered_in_park": row[8],
+                "yandex_driver_id": row[9],
+                "yandex_driver_name": row[10]
             }
         return None
+    
+    def get_user_by_phone(self, phone_number: str) -> Optional[Dict]:
+        """Получение информации о пользователе по номеру телефона"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+        SELECT user_id, username, full_name, phone_number, category, referrer_id, 
+               created_at, is_admin, is_registered_in_park, yandex_driver_id, yandex_driver_name
+        FROM users WHERE phone_number = ?
+        """, (phone_number,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            return {
+                "user_id": row[0],
+                "username": row[1],
+                "full_name": row[2],
+                "phone_number": row[3],
+                "category": row[4],
+                "referrer_id": row[5],
+                "created_at": row[6],
+                "is_admin": row[7],
+                "is_registered_in_park": row[8],
+                "yandex_driver_id": row[9],
+                "yandex_driver_name": row[10]
+            }
+        return None
+    
+    def get_referrals_for_order_check(self) -> List[Dict]:
+        """Получение списка рефералов, зарегистрированных в парке, для проверки заказов"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+        SELECT r.referrer_id, r.referred_id, u.yandex_driver_id
+        FROM referrals r
+        JOIN users u ON r.referred_id = u.user_id
+        WHERE u.is_registered_in_park = 1 AND u.yandex_driver_id IS NOT NULL
+        """)
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return [
+            {
+                "referrer_id": row[0],
+                "referred_id": row[1],
+                "yandex_driver_id": row[2]
+            }
+            for row in rows
+        ]
     
     def get_referrals(self, referrer_id: int) -> List[Dict]:
         """Получение списка приглашённых пользователей"""
@@ -154,6 +226,7 @@ class Database:
             """, (orders_count, user_id))
             
             conn.commit()
+            logging.info(f"Updated orders for user {user_id} to {orders_count}")
             return True
         except Exception as e:
             logging.error(f"Ошибка при обновлении заказов: {e}")
@@ -203,6 +276,12 @@ class Database:
     
     def is_admin(self, user_id: int) -> bool:
         """Проверка, является ли пользователь администратором"""
+        # Проверяем список постоянных админов из config
+        from config import ADMIN_USER_IDS
+        if user_id in ADMIN_USER_IDS:
+            return True
+        
+        # Проверяем статус в БД
         user = self.get_user(user_id)
         return user and user.get("is_admin") == 1
     
@@ -212,7 +291,7 @@ class Database:
         cursor = conn.cursor()
         
         cursor.execute("""
-        SELECT user_id, username, full_name, category, referrer_id, created_at
+        SELECT user_id, username, full_name, category, referrer_id, created_at, phone_number, is_registered_in_park
         FROM users
         ORDER BY created_at DESC
         """)
@@ -227,7 +306,9 @@ class Database:
                 "full_name": row[2],
                 "category": row[3],
                 "referrer_id": row[4],
-                "created_at": row[5]
+                "created_at": row[5],
+                "phone_number": row[6],
+                "is_registered_in_park": row[7]
             }
             for row in rows
         ]
@@ -256,4 +337,80 @@ class Database:
             "invited_count": invited_count,
             "completed_count": completed_count
         }
+
+    def get_referral_stats(self) -> List[Dict]:
+        """Получение статистики по всем рефералам"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+        SELECT 
+            referrer.user_id as referrer_user_id,
+            referrer.full_name as referrer_full_name,
+            referrer.username as referrer_username,
+            referred.user_id as referred_user_id,
+            referred.full_name as referred_full_name,
+            referred.username as referred_username,
+            r.orders_count
+        FROM referrals r
+        JOIN users referrer ON r.referrer_id = referrer.user_id
+        JOIN users referred ON r.referred_id = referred.user_id
+        ORDER BY referrer.created_at DESC, r.created_at DESC
+        """)
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return [
+            {
+                "referrer_user_id": row[0],
+                "referrer_full_name": row[1],
+                "referrer_username": row[2],
+                "referred_user_id": row[3],
+                "referred_full_name": row[4],
+                "referred_username": row[5],
+                "orders_count": row[6],
+            }
+            for row in rows
+        ]
+
+    def get_invited_users_with_order_count(self, referrer_id: int) -> List[Dict]:
+        """Получение списка приглашенных пользователем с количеством их заказов"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            logging.info(f"Executing query for referrer_id: {referrer_id}")
+            cursor.execute("""
+            SELECT 
+                u.full_name,
+                u.username,
+                u.phone_number,
+                COALESCE(r.orders_count, 0) as orders_count
+            FROM referrals r
+            JOIN users u ON r.referred_id = u.user_id
+            WHERE r.referrer_id = ?
+            ORDER BY r.created_at DESC
+            """, (referrer_id,))
+            
+            rows = cursor.fetchall()
+            logging.info(f"Query returned {len(rows)} rows for referrer_id: {referrer_id}")
+            
+            result = [
+                {
+                    "full_name": row[0] if row[0] else "Не указано",
+                    "username": row[1] if row[1] else None,
+                    "phone_number": row[2] if row[2] else None,
+                    "orders_count": int(row[3]) if row[3] is not None else 0,
+                }
+                for row in rows
+            ]
+            
+            logging.info(f"Returning result: {result}")
+            return result
+        except Exception as e:
+            logging.error(f"Error in get_invited_users_with_order_count: {e}", exc_info=True)
+            return []
+        finally:
+            conn.close()
 

@@ -1,6 +1,0 @@
-# Токен бота от @BotFather
-BOT_TOKEN=7974236752:AAFOgy3ScvSKNIKXDS4jCs1O_Qnm9GsaTRk
-
-# ID канала для уведомлений (например: -1001234567890)
-NOTIFICATION_CHANNEL_ID= -1003295809377
-

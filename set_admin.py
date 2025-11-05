@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Скрипт для установки/снятия статуса администратора
 Использование:
@@ -8,7 +9,12 @@
 """
 
 import sys
+import os
 from database import Database
+
+# Установка UTF-8 для Windows
+if sys.platform == 'win32':
+    os.system('chcp 65001 >nul 2>&1')
 
 def main():
     db = Database()
@@ -27,11 +33,12 @@ def main():
         admins = [u for u in users if db.is_admin(u['user_id'])]
         
         if not admins:
-            print("Нет администраторов")
+            print("No admins found")
         else:
-            print(f"Администраторы ({len(admins)}):")
+            print(f"Admins ({len(admins)}):")
             for admin in admins:
-                print(f"  - {admin['full_name']} (@{admin['username']}, ID: {admin['user_id']})")
+                username = admin['username'] if admin['username'] else 'no username'
+                print(f"  - ID: {admin['user_id']}, @{username}")
         return
     
     if len(sys.argv) < 3:
@@ -48,22 +55,18 @@ def main():
         if db.set_admin(user_id, True):
             user = db.get_user(user_id)
             if user:
-                print(f"✅ Пользователь {user['full_name']} (ID: {user_id}) теперь администратор")
+                print(f"[OK] User ID: {user_id} is now admin")
             else:
-                print(f"✅ Пользователь ID: {user_id} добавлен как администратор")
-                print("   (пользователь ещё не зарегистрировался в боте)")
+                print(f"[OK] User ID: {user_id} added as admin")
+                print("   (user hasn't registered in bot yet)")
         else:
-            print(f"❌ Ошибка при добавлении администратора")
+            print(f"[ERROR] Failed to add admin")
     
     elif command == "remove":
         if db.set_admin(user_id, False):
-            user = db.get_user(user_id)
-            if user:
-                print(f"✅ У пользователя {user['full_name']} (ID: {user_id}) убран статус администратора")
-            else:
-                print(f"✅ У пользователя ID: {user_id} убран статус администратора")
+            print(f"[OK] User ID: {user_id} admin status removed")
         else:
-            print(f"❌ Ошибка при удалении администратора")
+            print(f"[ERROR] Failed to remove admin")
     
     else:
         print(f"Неизвестная команда: {command}")

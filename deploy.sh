@@ -27,8 +27,7 @@ pip3 install -r requirements.txt
 # Копирование .env файла (если его нет)
 if [ ! -f .env ]; then
     echo "⚠️  Не найден .env файл. Создайте его вручную!"
-    cp env_example.txt .env
-    echo "📝 Создан .env файл из примера. Отредактируйте его!"
+    echo "📝 Создайте .env файл с переменными: BOT_TOKEN, NOTIFICATION_CHANNEL_ID, YANDEX_PARK_ID, YANDEX_API_KEY, YANDEX_CLIENT_ID"
     exit 1
 fi
 
