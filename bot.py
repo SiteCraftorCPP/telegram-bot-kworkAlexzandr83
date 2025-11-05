@@ -253,8 +253,17 @@ async def process_phone(message: types.Message, state: FSMContext):
         # Сохраняем пользователя с отметкой о регистрации в парке
         # Если пользователь уже в парке, не учитываем его как реферала (referrer_id=None)
         user_info = user_data[user_id]["user_info"]
-        referrer_id = None  # Не учитываем реферала для пользователей, уже зарегистрированных в парке
+        referrer_id = user_data[user_id].get("referrer_id")  # Сохраняем referrer_id из реферальной ссылки
         
+        # Определяем позицию водителя в парке
+        park_position = None
+        driver_id = driver_info.get("driver_id")
+        if driver_id:
+            park_position = await yandex_api.get_driver_position(driver_id)
+            logging.info(f"Определена позиция водителя {driver_id}: {park_position}")
+        
+        # Если пользователь уже в парке, не учитываем его как реферала (referrer_id=None)
+        # Но если пользователь регистрируется по реферальной ссылке и уже в парке, нужно учитывать его позицию
         db.add_user(
             user_id=user_info["id"],
             username=user_info["username"],
@@ -262,11 +271,29 @@ async def process_phone(message: types.Message, state: FSMContext):
             first_name=user_info["first_name"],
             phone_number=cleaned_phone,
             category=None,
-            referrer_id=referrer_id,
+            referrer_id=None,  # Не учитываем реферала для пользователей, уже зарегистрированных в парке
             is_registered_in_park=True,
-            yandex_driver_id=driver_info.get("driver_id"),
-            yandex_driver_name=driver_name
+            yandex_driver_id=driver_id,
+            yandex_driver_name=driver_name,
+            park_position=park_position
         )
+        
+        # Если есть реферер И пользователь уже в парке, создаем запись реферала с позицией
+        if referrer_id and park_position:
+            # Создаем запись в referrals для отслеживания позиции и заказов
+            conn = db.get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute("""
+                INSERT OR IGNORE INTO referrals (referrer_id, referred_id, park_position)
+                VALUES (?, ?, ?)
+                """, (referrer_id, user_info["id"], park_position))
+                conn.commit()
+                logging.info(f"Добавлен реферал (уже в парке): referrer_id={referrer_id}, referred_id={user_info['id']}, park_position={park_position}")
+            except Exception as e:
+                logging.error(f"Ошибка при добавлении реферала: {e}")
+            finally:
+                conn.close()
         
         # Формируем сообщение с информацией о водителе
         info_text = (

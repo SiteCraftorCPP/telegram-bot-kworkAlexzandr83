@@ -30,9 +30,16 @@ class Database:
             is_admin INTEGER DEFAULT 0,
             is_registered_in_park INTEGER DEFAULT 0,
             yandex_driver_id TEXT,
-            yandex_driver_name TEXT
+            yandex_driver_name TEXT,
+            park_position TEXT
         )
         """)
+        
+        # Добавляем колонку park_position, если её нет
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN park_position TEXT")
+        except sqlite3.OperationalError:
+            pass  # Колонка уже существует
         
         # Таблица рефералов
         cursor.execute("""
@@ -42,12 +49,24 @@ class Database:
             referred_id INTEGER,
             orders_count INTEGER DEFAULT 0,
             bonus_paid INTEGER DEFAULT 0,
+            park_position TEXT,
+            notification_sent INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(referrer_id, referred_id),
             FOREIGN KEY (referrer_id) REFERENCES users(user_id),
             FOREIGN KEY (referred_id) REFERENCES users(user_id)
         )
         """)
+        
+        # Добавляем колонки park_position и notification_sent, если их нет
+        try:
+            cursor.execute("ALTER TABLE referrals ADD COLUMN park_position TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE referrals ADD COLUMN notification_sent INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         
         # Таблица для отслеживания заказов
         cursor.execute("""
@@ -66,7 +85,8 @@ class Database:
     def add_user(self, user_id: int, username: str, full_name: str, 
                  first_name: str, phone_number: str, category: str = None, 
                  referrer_id: Optional[int] = None, is_registered_in_park: bool = False,
-                 yandex_driver_id: str = None, yandex_driver_name: str = None):
+                 yandex_driver_id: str = None, yandex_driver_name: str = None,
+                 park_position: str = None):
         """Добавление нового пользователя"""
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -75,19 +95,19 @@ class Database:
             cursor.execute("""
             INSERT OR IGNORE INTO users (user_id, username, full_name, first_name, phone_number, 
                                         category, referrer_id, is_registered_in_park, 
-                                        yandex_driver_id, yandex_driver_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        yandex_driver_id, yandex_driver_name, park_position)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (user_id, username, full_name, first_name, phone_number, category, 
-                  referrer_id, 1 if is_registered_in_park else 0, yandex_driver_id, yandex_driver_name))
+                  referrer_id, 1 if is_registered_in_park else 0, yandex_driver_id, yandex_driver_name, park_position))
             
             # Если есть реферер И пользователь НЕ зарегистрирован в парке, добавляем запись в таблицу рефералов
             # (пользователи, уже зарегистрированные в парке, не учитываются как рефералы)
             if referrer_id and not is_registered_in_park:
                 cursor.execute("""
-                INSERT OR IGNORE INTO referrals (referrer_id, referred_id)
-                VALUES (?, ?)
-                """, (referrer_id, user_id))
-                logging.info(f"Добавлен реферал: referrer_id={referrer_id}, referred_id={user_id}")
+                INSERT OR IGNORE INTO referrals (referrer_id, referred_id, park_position)
+                VALUES (?, ?, ?)
+                """, (referrer_id, user_id, park_position))
+                logging.info(f"Добавлен реферал: referrer_id={referrer_id}, referred_id={user_id}, park_position={park_position}")
             elif referrer_id and is_registered_in_park:
                 logging.info(f"Реферал не добавлен (пользователь уже в парке): referrer_id={referrer_id}, referred_id={user_id}")
             
@@ -106,7 +126,7 @@ class Database:
         
         cursor.execute("""
         SELECT user_id, username, full_name, phone_number, category, referrer_id, 
-               created_at, is_admin, is_registered_in_park, yandex_driver_id, yandex_driver_name
+               created_at, is_admin, is_registered_in_park, yandex_driver_id, yandex_driver_name, park_position
         FROM users WHERE user_id = ?
         """, (user_id,))
         
@@ -125,7 +145,8 @@ class Database:
                 "is_admin": row[7],
                 "is_registered_in_park": row[8],
                 "yandex_driver_id": row[9],
-                "yandex_driver_name": row[10]
+                "yandex_driver_name": row[10],
+                "park_position": row[11]
             }
         return None
     
@@ -136,7 +157,7 @@ class Database:
         
         cursor.execute("""
         SELECT user_id, username, full_name, phone_number, category, referrer_id, 
-               created_at, is_admin, is_registered_in_park, yandex_driver_id, yandex_driver_name
+               created_at, is_admin, is_registered_in_park, yandex_driver_id, yandex_driver_name, park_position
         FROM users WHERE phone_number = ?
         """, (phone_number,))
         
@@ -155,7 +176,8 @@ class Database:
                 "is_admin": row[7],
                 "is_registered_in_park": row[8],
                 "yandex_driver_id": row[9],
-                "yandex_driver_name": row[10]
+                "yandex_driver_name": row[10],
+                "park_position": row[11]
             }
         return None
     
@@ -165,7 +187,7 @@ class Database:
         cursor = conn.cursor()
         
         cursor.execute("""
-        SELECT r.referrer_id, r.referred_id, u.yandex_driver_id
+        SELECT r.referrer_id, r.referred_id, u.yandex_driver_id, r.park_position, r.orders_count, r.notification_sent
         FROM referrals r
         JOIN users u ON r.referred_id = u.user_id
         WHERE u.is_registered_in_park = 1 AND u.yandex_driver_id IS NOT NULL
@@ -178,7 +200,10 @@ class Database:
             {
                 "referrer_id": row[0],
                 "referred_id": row[1],
-                "yandex_driver_id": row[2]
+                "yandex_driver_id": row[2],
+                "park_position": row[3],
+                "orders_count": row[4] or 0,
+                "notification_sent": row[5] or 0
             }
             for row in rows
         ]
@@ -230,6 +255,54 @@ class Database:
             return True
         except Exception as e:
             logging.error(f"Ошибка при обновлении заказов: {e}")
+            return False
+        finally:
+            conn.close()
+    
+    def update_user_park_position(self, user_id: int, park_position: str) -> bool:
+        """Обновление позиции пользователя в парке"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+            UPDATE users
+            SET park_position = ?
+            WHERE user_id = ?
+            """, (park_position, user_id))
+            
+            # Также обновляем в referrals, если есть запись
+            cursor.execute("""
+            UPDATE referrals
+            SET park_position = ?
+            WHERE referred_id = ?
+            """, (park_position, user_id))
+            
+            conn.commit()
+            logging.info(f"Updated park_position for user {user_id} to {park_position}")
+            return True
+        except Exception as e:
+            logging.error(f"Ошибка при обновлении позиции: {e}")
+            return False
+        finally:
+            conn.close()
+    
+    def mark_notification_sent(self, referrer_id: int, referred_id: int) -> bool:
+        """Отметить, что уведомление о достижении цели отправлено"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+            UPDATE referrals
+            SET notification_sent = 1
+            WHERE referrer_id = ? AND referred_id = ?
+            """, (referrer_id, referred_id))
+            
+            conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Ошибка при отметке уведомления: {e}")
             return False
         finally:
             conn.close()

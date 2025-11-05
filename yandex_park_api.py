@@ -188,6 +188,76 @@ class YandexParkAPI:
             logging.error(f"Ошибка при получении заказов: {e}")
             return None
     
+    async def get_driver_position(self, driver_id: str) -> Optional[str]:
+        """
+        Определяет позицию водителя в парке (грузовой/экспресс)
+        
+        Args:
+            driver_id: ID водителя
+        
+        Returns:
+            "cargo" для грузового, "express" для экспресс, или None
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.BASE_URL}/v1/parks/driver-profiles/retrieve"
+                
+                payload = {
+                    "fields": {
+                        "driver_profile": ["id", "work_status"],
+                        "car": ["brand", "model", "amenities", "cargo_type"]
+                    },
+                    "query": {
+                        "park": {
+                            "id": self.park_id,
+                            "driver_profile": {
+                                "id": driver_id
+                            }
+                        }
+                    }
+                }
+                
+                async with session.post(url, json=payload, headers=self.headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        # Пытаемся определить позицию по типу автомобиля или amenities
+                        driver_profiles = data.get("driver_profiles", [])
+                        if driver_profiles:
+                            driver = driver_profiles[0]
+                            car = driver.get("car", {})
+                            
+                            # Проверяем cargo_type (если есть)
+                            cargo_type = car.get("cargo_type")
+                            if cargo_type:
+                                # Если cargo_type указывает на грузовой транспорт
+                                if cargo_type in ["cargo", "van", "truck"]:
+                                    return "cargo"
+                                else:
+                                    return "express"
+                            
+                            # Проверяем по марке/модели автомобиля (если есть типичные грузовые марки)
+                            brand = car.get("brand", "").lower()
+                            model = car.get("model", "").lower()
+                            
+                            # Список ключевых слов для грузовых авто
+                            cargo_keywords = ["грузовой", "фургон", "газель", "фиат", "лада largus", "largus", "mercedes", "ford transit", "volkswagen crafter"]
+                            
+                            if any(keyword in brand or keyword in model for keyword in cargo_keywords):
+                                return "cargo"
+                            
+                            # По умолчанию считаем экспрессом
+                            return "express"
+                        
+                        return None
+                    else:
+                        logging.warning(f"Не удалось получить позицию водителя: {response.status}")
+                        return None
+                        
+        except Exception as e:
+            logging.error(f"Ошибка при получении позиции водителя: {e}")
+            return None
+    
     def _normalize_phone(self, phone: str) -> str:
         """
         Нормализует номер телефона, убирая все лишние символы
