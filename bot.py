@@ -906,6 +906,11 @@ async def show_referral_statistics(message: types.Message, state: FSMContext):
                 if i % 5 == 0 or i == 1:
                     await msg.edit_text(f"🔄 Обновляю данные о заказах...\nОбработано: {i-1}/{len(referrals_to_check)}")
                 
+                if not yandex_driver_id:
+                    failed_count += 1
+                    logging.warning(f"Пустой driver_id для user_id={referred_id}")
+                    continue
+                
                 orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
                 if orders_count is not None:
                     # Обновляем заказы в referrals
@@ -932,7 +937,7 @@ async def show_referral_statistics(message: types.Message, state: FSMContext):
                     logging.info(f"Обновлены заказы для user_id={referred_id}, driver_id={yandex_driver_id}, заказов={orders_count}")
                 else:
                     failed_count += 1
-                    logging.warning(f"Не удалось получить заказы для user_id={referred_id}, driver_id={yandex_driver_id}")
+                    logging.warning(f"Не удалось получить заказы для user_id={referred_id}, driver_id={yandex_driver_id} - API вернул None")
                 
                 await asyncio.sleep(0.5)
             except Exception as e:

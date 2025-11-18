@@ -1,6 +1,7 @@
 import aiohttp
 import asyncio
 import logging
+import json
 from typing import Optional, Dict, List
 
 class YandexParkAPI:
@@ -161,6 +162,10 @@ class YandexParkAPI:
             Количество заказов или None при ошибке
         """
         try:
+            if not driver_id:
+                logging.warning("get_driver_orders_count: driver_id пустой или None")
+                return None
+            
             async with aiohttp.ClientSession() as session:
                 url = f"{self.BASE_URL}/v1/parks/orders/list"
                 
@@ -177,20 +182,42 @@ class YandexParkAPI:
                     "limit": 10000  # Увеличиваем лимит для получения всех заказов
                 }
                 
+                logging.info(f"Запрос заказов для driver_id={driver_id}, park_id={self.park_id}, url={url}")
+                
                 async with session.post(url, json=payload, headers=self.headers) as response:
+                    response_text = await response.text()
+                    
                     if response.status == 200:
-                        data = await response.json()
-                        orders = data.get("orders", [])
-                        # Считаем все заказы (API возвращает только выполненные/активные)
-                        # Если нужны только завершенные, фильтруем по статусу
-                        completed_orders = [o for o in orders if o.get("status") in ["complete", "finished"]]
-                        # Если нет завершенных, считаем все (возможно API уже возвращает только завершенные)
-                        count = len(completed_orders) if completed_orders else len(orders)
-                        logging.info(f"Driver {driver_id}: всего заказов в ответе {len(orders)}, завершенных {len(completed_orders)}, итого: {count}")
-                        return count
+                        try:
+                            # Парсим JSON из текста ответа
+                            data = json.loads(response_text)
+                            orders = data.get("orders", [])
+                            
+                            # Логируем структуру ответа для отладки
+                            logging.info(f"Driver {driver_id}: API ответ статус 200, получено заказов в массиве: {len(orders)}")
+                            
+                            # Проверяем структуру ответа
+                            if "orders" not in data:
+                                logging.warning(f"Driver {driver_id}: в ответе нет ключа 'orders'. Структура ответа: {list(data.keys())[:10]}")
+                                logging.warning(f"Driver {driver_id}: полный ответ API (первые 1000 символов): {response_text[:1000]}")
+                            
+                            if len(orders) == 0:
+                                logging.warning(f"Driver {driver_id}: массив заказов пустой. Полный ответ API: {response_text[:1000]}")
+                                # Возвращаем 0, а не None, если массив пустой (это валидный результат)
+                                return 0
+                            
+                            # Считаем все заказы (API возвращает только выполненные/активные)
+                            # Если нужны только завершенные, фильтруем по статусу
+                            completed_orders = [o for o in orders if o.get("status") in ["complete", "finished"]]
+                            # Если нет завершенных, считаем все (возможно API уже возвращает только завершенные)
+                            count = len(completed_orders) if completed_orders else len(orders)
+                            logging.info(f"Driver {driver_id}: всего заказов в ответе {len(orders)}, завершенных {len(completed_orders)}, итого: {count}")
+                            return count
+                        except Exception as parse_error:
+                            logging.error(f"Driver {driver_id}: ошибка парсинга ответа API: {parse_error}, ответ: {response_text[:500]}")
+                            return None
                     else:
-                        error_text = await response.text()
-                        logging.warning(f"Не удалось получить заказы для {driver_id}: статус {response.status}, ошибка: {error_text}")
+                        logging.warning(f"Не удалось получить заказы для {driver_id}: статус {response.status}, ошибка: {response_text[:500]}")
                         return None
                         
         except Exception as e:
