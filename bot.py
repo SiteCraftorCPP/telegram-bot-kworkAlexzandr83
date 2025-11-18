@@ -541,13 +541,17 @@ async def update_referrals_orders(user_id: int):
         user_ref = db.get_user(ref['user_id'])
         if user_ref and user_ref.get('is_registered_in_park') and user_ref.get('yandex_driver_id'):
             try:
-                orders_count = await yandex_api.get_driver_orders_count(user_ref['yandex_driver_id'])
+                yandex_driver_id = user_ref['yandex_driver_id']
+                orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
                 if orders_count is not None:
                     db.update_orders_count(ref['user_id'], orders_count)
                     updated_count += 1
+                    logging.info(f"Обновлены заказы для user_id={ref['user_id']}, driver_id={yandex_driver_id}, заказов={orders_count}")
+                else:
+                    logging.warning(f"Не удалось получить заказы для user_id={ref['user_id']}, driver_id={yandex_driver_id}")
                 await asyncio.sleep(0.5)  # Небольшая задержка, чтобы не перегружать API
             except Exception as e:
-                logging.error(f"Ошибка при обновлении заказов для {ref['user_id']}: {e}")
+                logging.error(f"Ошибка при обновлении заказов для {ref['user_id']}: {e}", exc_info=True)
     
     return updated_count
 
@@ -816,25 +820,41 @@ async def update_all_orders(message: types.Message, state: FSMContext):
     
     # Получаем всех рефералов, зарегистрированных в парке
     referrals_to_check = db.get_referrals_for_order_check()
-    updated_count = 0
     
-    for referral in referrals_to_check:
+    if not referrals_to_check:
+        await msg.edit_text("⚠️ Не найдено рефералов для проверки (зарегистрированных в парке)")
+        return
+    
+    updated_count = 0
+    failed_count = 0
+    
+    for i, referral in enumerate(referrals_to_check, 1):
         referred_id = referral["referred_id"]
         yandex_driver_id = referral["yandex_driver_id"]
         
         try:
+            # Обновляем сообщение о прогрессе каждые 5 записей
+            if i % 5 == 0 or i == 1:
+                await msg.edit_text(f"🔄 Обновляю данные о заказах...\nОбработано: {i-1}/{len(referrals_to_check)}")
+            
             orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
             if orders_count is not None:
                 db.update_orders_count(referred_id, orders_count)
                 updated_count += 1
+                logging.info(f"Обновлены заказы для user_id={referred_id}, driver_id={yandex_driver_id}, заказов={orders_count}")
+            else:
+                failed_count += 1
+                logging.warning(f"Не удалось получить заказы для user_id={referred_id}, driver_id={yandex_driver_id}")
+            
             await asyncio.sleep(0.5)  # Задержка, чтобы не перегружать API
         except Exception as e:
-            logging.error(f"Ошибка при обновлении заказов для {referred_id}: {e}")
+            failed_count += 1
+            logging.error(f"Ошибка при обновлении заказов для {referred_id}: {e}", exc_info=True)
     
-    await msg.edit_text(
-        f"✅ Обновление завершено!\n\n"
-        f"📊 Обновлено записей: {updated_count} из {len(referrals_to_check)}"
-    )
+    result_text = f"✅ Обновление завершено!\n\n📊 Обновлено записей: {updated_count} из {len(referrals_to_check)}"
+    if failed_count > 0:
+        result_text += f"\n⚠️ Ошибок: {failed_count}"
+    await msg.edit_text(result_text)
 
 
 @dp.message_handler(lambda message: message.text == "📊 Статистика рефералов", state="*")
@@ -849,31 +869,56 @@ async def show_referral_statistics(message: types.Message, state: FSMContext):
     # Обновляем данные перед показом статистики
     msg = await message.answer("🔄 Обновляю данные о заказах...")
     referrals_to_check = db.get_referrals_for_order_check()
-    updated_count = 0
     
-    for referral in referrals_to_check:
-        referred_id = referral["referred_id"]
-        yandex_driver_id = referral["yandex_driver_id"]
+    if not referrals_to_check:
+        await msg.edit_text("⚠️ Не найдено рефералов для проверки (зарегистрированных в парке)")
+        await asyncio.sleep(2)
+        await msg.delete()
+    else:
+        updated_count = 0
+        failed_count = 0
         
-        try:
-            orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
-            if orders_count is not None:
-                db.update_orders_count(referred_id, orders_count)
-                updated_count += 1
-            await asyncio.sleep(0.5)
-        except Exception as e:
-            logging.error(f"Ошибка при обновлении заказов для {referred_id}: {e}")
-    
-    if updated_count > 0:
-        await msg.edit_text(f"✅ Обновлено: {updated_count} записей")
-        await asyncio.sleep(1)
+        for i, referral in enumerate(referrals_to_check, 1):
+            referred_id = referral["referred_id"]
+            yandex_driver_id = referral["yandex_driver_id"]
+            
+            try:
+                # Обновляем сообщение о прогрессе
+                if i % 5 == 0 or i == 1:
+                    await msg.edit_text(f"🔄 Обновляю данные о заказах...\nОбработано: {i-1}/{len(referrals_to_check)}")
+                
+                orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
+                if orders_count is not None:
+                    db.update_orders_count(referred_id, orders_count)
+                    updated_count += 1
+                    logging.info(f"Обновлены заказы для user_id={referred_id}, driver_id={yandex_driver_id}, заказов={orders_count}")
+                else:
+                    failed_count += 1
+                    logging.warning(f"Не удалось получить заказы для user_id={referred_id}, driver_id={yandex_driver_id}")
+                
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                failed_count += 1
+                logging.error(f"Ошибка при обновлении заказов для {referred_id}: {e}", exc_info=True)
+        
+        result_text = f"✅ Обновлено: {updated_count} из {len(referrals_to_check)}"
+        if failed_count > 0:
+            result_text += f"\n⚠️ Ошибок: {failed_count}"
+        await msg.edit_text(result_text)
+        await asyncio.sleep(1)  # Небольшая задержка, чтобы данные записались в БД
         await msg.delete()
     
+    # Получаем обновленные данные из БД
     referrals_data = db.get_referral_stats()
     
     if not referrals_data:
         await message.answer("📊 Пока нет данных по рефералам.")
         return
+
+    # Логируем данные для отладки
+    logging.info(f"Получено {len(referrals_data)} записей статистики рефералов")
+    for ref in referrals_data[:3]:  # Логируем первые 3 для отладки
+        logging.info(f"Статистика: referrer={ref.get('referrer_full_name')}, referred={ref.get('referred_full_name')}, orders={ref.get('orders_count')}")
 
     stats_text = f"📊 <b>Статистика по рефералам (всего: {len(referrals_data)})</b>\n\n"
     
@@ -888,10 +933,16 @@ async def show_referral_statistics(message: types.Message, state: FSMContext):
                 f"(@{ref['referrer_username'] if ref['referrer_username'] else 'нет username'})\n\n"
             )
         
+        orders_count = ref.get('orders_count', 0)
+        if orders_count is None:
+            orders_count = 0
+        else:
+            orders_count = int(orders_count)
+        
         stats_text += (
             f"  ➡️ <b>Кого пригласил:</b> {ref['referred_full_name']} "
             f"(@{ref['referred_username'] if ref['referred_username'] else 'нет username'})\n"
-            f"  📈 <b>Выполнено заказов:</b> {ref['orders_count']}\n\n"
+            f"  📈 <b>Выполнено заказов:</b> {orders_count}\n\n"
         )
     
     if len(referrals_data) > 30:

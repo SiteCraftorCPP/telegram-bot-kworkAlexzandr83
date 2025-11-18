@@ -250,11 +250,18 @@ class Database:
             WHERE referred_id = ?
             """, (orders_count, user_id))
             
+            rows_affected = cursor.rowcount
             conn.commit()
-            logging.info(f"Updated orders for user {user_id} to {orders_count}")
+            
+            if rows_affected > 0:
+                logging.info(f"Updated orders for user {user_id} to {orders_count} (rows affected: {rows_affected})")
+            else:
+                logging.warning(f"No rows updated for user {user_id} - возможно, запись не найдена в referrals")
+            
             return True
         except Exception as e:
-            logging.error(f"Ошибка при обновлении заказов: {e}")
+            logging.error(f"Ошибка при обновлении заказов для user_id {user_id}: {e}", exc_info=True)
+            conn.rollback()
             return False
         finally:
             conn.close()
@@ -424,7 +431,7 @@ class Database:
             referred.user_id as referred_user_id,
             referred.full_name as referred_full_name,
             referred.username as referred_username,
-            r.orders_count
+            COALESCE(r.orders_count, 0) as orders_count
         FROM referrals r
         JOIN users referrer ON r.referrer_id = referrer.user_id
         JOIN users referred ON r.referred_id = referred.user_id
@@ -442,7 +449,7 @@ class Database:
                 "referred_user_id": row[3],
                 "referred_full_name": row[4],
                 "referred_username": row[5],
-                "orders_count": row[6],
+                "orders_count": int(row[6]) if row[6] is not None else 0,
             }
             for row in rows
         ]

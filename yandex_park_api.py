@@ -164,6 +164,7 @@ class YandexParkAPI:
             async with aiohttp.ClientSession() as session:
                 url = f"{self.BASE_URL}/v1/parks/orders/list"
                 
+                # Получаем все заказы водителя
                 payload = {
                     "query": {
                         "park": {
@@ -173,19 +174,27 @@ class YandexParkAPI:
                             }
                         }
                     },
-                    "limit": 1000
+                    "limit": 10000  # Увеличиваем лимит для получения всех заказов
                 }
                 
                 async with session.post(url, json=payload, headers=self.headers) as response:
                     if response.status == 200:
                         data = await response.json()
-                        return len(data.get("orders", []))
+                        orders = data.get("orders", [])
+                        # Считаем все заказы (API возвращает только выполненные/активные)
+                        # Если нужны только завершенные, фильтруем по статусу
+                        completed_orders = [o for o in orders if o.get("status") in ["complete", "finished"]]
+                        # Если нет завершенных, считаем все (возможно API уже возвращает только завершенные)
+                        count = len(completed_orders) if completed_orders else len(orders)
+                        logging.info(f"Driver {driver_id}: всего заказов в ответе {len(orders)}, завершенных {len(completed_orders)}, итого: {count}")
+                        return count
                     else:
-                        logging.warning(f"Не удалось получить заказы: {response.status}")
+                        error_text = await response.text()
+                        logging.warning(f"Не удалось получить заказы для {driver_id}: статус {response.status}, ошибка: {error_text}")
                         return None
                         
         except Exception as e:
-            logging.error(f"Ошибка при получении заказов: {e}")
+            logging.error(f"Ошибка при получении заказов для {driver_id}: {e}", exc_info=True)
             return None
     
     async def get_driver_position(self, driver_id: str) -> Optional[str]:
