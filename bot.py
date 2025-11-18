@@ -550,7 +550,7 @@ async def update_referrals_orders(user_id: int):
                 else:
                     logging.warning(f"Не удалось получить заказы для user_id={ref['user_id']}, driver_id={yandex_driver_id}")
                 # Увеличиваем задержку, чтобы избежать 429 ошибок (лимит API)
-                await asyncio.sleep(1.0)  # Небольшая задержка, чтобы не перегружать API
+                await asyncio.sleep(2.0)  # Увеличенная задержка, чтобы избежать 429 ошибок
             except Exception as e:
                 logging.error(f"Ошибка при обновлении заказов для {ref['user_id']}: {e}", exc_info=True)
     
@@ -866,7 +866,7 @@ async def update_all_orders(message: types.Message, state: FSMContext):
                 failed_count += 1
                 logging.warning(f"Не удалось получить заказы для user_id={referred_id}, driver_id={yandex_driver_id}")
             
-            await asyncio.sleep(0.5)  # Задержка, чтобы не перегружать API
+            await asyncio.sleep(2.0)  # Увеличенная задержка, чтобы избежать 429 ошибок
         except Exception as e:
             failed_count += 1
             logging.error(f"Ошибка при обновлении заказов для {referred_id}: {e}", exc_info=True)
@@ -944,7 +944,7 @@ async def show_referral_statistics(message: types.Message, state: FSMContext):
                     logging.warning(f"Не удалось получить заказы для user_id={referred_id}, driver_id={yandex_driver_id} - API вернул None")
                 
                 # Увеличиваем задержку, чтобы избежать 429 ошибок (лимит API)
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(2.0)
             except Exception as e:
                 failed_count += 1
                 logging.error(f"Ошибка при обновлении заказов для {referred_id}: {e}", exc_info=True)

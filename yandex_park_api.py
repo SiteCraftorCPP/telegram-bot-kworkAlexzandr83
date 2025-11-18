@@ -173,8 +173,16 @@ class YandexParkAPI:
                 # Получаем все заказы водителя
                 # API требует либо booked_at, либо ended_at в order - используем ended_at для завершенных заказов
                 # Указываем большой диапазон дат для получения всех заказов
-                now = datetime.now()
+                # API требует формат ISO 8601 с временной зоной (UTC) и миллисекундами
+                from datetime import timezone
+                now = datetime.now(timezone.utc)
                 year_ago = now - timedelta(days=365)  # За последний год
+                
+                # Форматируем даты в правильный ISO 8601 формат с UTC
+                # Используем isoformat() который дает правильный формат: 2024-11-18T17:31:00+00:00
+                # Но API может требовать формат с Z, поэтому заменяем +00:00 на Z
+                from_str = year_ago.isoformat().replace('+00:00', 'Z')
+                to_str = now.isoformat().replace('+00:00', 'Z')
                 
                 payload = {
                     "query": {
@@ -182,8 +190,8 @@ class YandexParkAPI:
                             "id": self.park_id,
                             "order": {
                                 "ended_at": {
-                                    "from": year_ago.strftime("%Y-%m-%dT%H:%M:%S"),
-                                    "to": now.strftime("%Y-%m-%dT%H:%M:%S")
+                                    "from": from_str,
+                                    "to": to_str
                                 }
                             },
                             "driver_profile": {
