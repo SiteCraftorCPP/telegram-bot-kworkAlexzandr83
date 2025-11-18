@@ -122,7 +122,6 @@ def get_admin_keyboard():
     """Клавиатура админ-панели"""
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     keyboard.add(KeyboardButton("🔍 Поиск по номеру"))
-    keyboard.add(KeyboardButton("🔄 Обновить заказы"))
     keyboard.add(KeyboardButton("◀️ Назад"))
     return keyboard
 
@@ -798,7 +797,22 @@ async def admin_process_search_phone(message: types.Message, state: FSMContext):
         # Водитель найден в парке, но не в боте
         report_text += "<b><u>Данные из бота</u></b>\n"
         report_text += "ℹ️ <i>Пользователь не зарегистрирован в боте</i>\n"
-        report_text += "<i>(Зарегистрирован напрямую в Яндекс Парке)</i>\n\n"
+        report_text += "<i>(Зарегистрирован напрямую в Яндекс Парке)</i>\n"
+        
+        # Пытаемся найти пользователя в базе по driver_id и получить количество заказов
+        driver_id = driver_in_park.get("driver_id")
+        if driver_id:
+            user_by_driver = db.get_user_by_driver_id(driver_id)
+            if user_by_driver and user_by_driver.get("user_id"):
+                user_id = user_by_driver.get("user_id")
+                orders_count = db.get_user_orders_count(user_id)
+                report_text += f"📈 <b>Выполнено заказов:</b> {orders_count}\n"
+            else:
+                report_text += f"📈 <b>Выполнено заказов:</b> 0\n"
+        else:
+            report_text += f"📈 <b>Выполнено заказов:</b> 0\n"
+        
+        report_text += "\n"
 
     try:
         await message.answer(report_text, parse_mode="HTML", reply_markup=get_admin_keyboard())
@@ -808,75 +822,6 @@ async def admin_process_search_phone(message: types.Message, state: FSMContext):
             f"❌ Ошибка при формировании отчета. Попробуйте еще раз.\n\nОшибка: {str(e)}",
             reply_markup=get_admin_keyboard()
         )
-
-
-@dp.message_handler(lambda message: message.text == "🔄 Обновить заказы", state="*")
-async def update_all_orders(message: types.Message, state: FSMContext):
-    """Обновить данные о заказах для всех рефералов"""
-    user_id = message.from_user.id
-    
-    if not db.is_admin(user_id):
-        await message.answer("У вас нет прав администратора")
-        return
-    
-    msg = await message.answer("🔄 Обновляю данные о заказах для всех рефералов...\nЭто может занять некоторое время...")
-    
-    # Получаем всех пользователей, зарегистрированных в парке (не только тех, кто в referrals)
-    referrals_to_check = db.get_all_park_users_for_order_check()
-    
-    if not referrals_to_check:
-        await msg.edit_text("⚠️ Не найдено пользователей для проверки (зарегистрированных в парке)")
-        return
-    
-    updated_count = 0
-    failed_count = 0
-    
-    for i, referral in enumerate(referrals_to_check, 1):
-        referred_id = referral["referred_id"]
-        yandex_driver_id = referral["yandex_driver_id"]
-        
-        try:
-            # Обновляем сообщение о прогрессе каждые 5 записей
-            if i % 5 == 0 or i == 1:
-                await msg.edit_text(f"🔄 Обновляю данные о заказах...\nОбработано: {i-1}/{len(referrals_to_check)}")
-            
-            orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
-            if orders_count is not None:
-                # Обновляем заказы в referrals
-                db.update_orders_count(referred_id, orders_count)
-                
-                # Если referrer_id есть, гарантируем что запись в referrals существует
-                if referral.get("referrer_id"):
-                    conn = db.get_connection()
-                    cursor = conn.cursor()
-                    try:
-                        cursor.execute("""
-                        INSERT OR IGNORE INTO referrals (referrer_id, referred_id, park_position)
-                        VALUES (?, ?, ?)
-                        """, (referral["referrer_id"], referred_id, referral.get("park_position")))
-                        # Обновляем orders_count в случае, если запись уже существовала
-                        cursor.execute("""
-                        UPDATE referrals SET orders_count = ? WHERE referred_id = ?
-                        """, (orders_count, referred_id))
-                        conn.commit()
-                    finally:
-                        conn.close()
-                
-                updated_count += 1
-                logging.info(f"Обновлены заказы для user_id={referred_id}, driver_id={yandex_driver_id}, заказов={orders_count}")
-            else:
-                failed_count += 1
-                logging.warning(f"Не удалось получить заказы для user_id={referred_id}, driver_id={yandex_driver_id}")
-            
-            await asyncio.sleep(2.0)  # Увеличенная задержка, чтобы избежать 429 ошибок
-        except Exception as e:
-            failed_count += 1
-            logging.error(f"Ошибка при обновлении заказов для {referred_id}: {e}", exc_info=True)
-    
-    result_text = f"✅ Обновление завершено!\n\n📊 Обновлено записей: {updated_count} из {len(referrals_to_check)}"
-    if failed_count > 0:
-        result_text += f"\n⚠️ Ошибок: {failed_count}"
-    await msg.edit_text(result_text)
 
 
 @dp.message_handler(lambda message: message.text == "📈 Статистика", state="*")

@@ -181,6 +181,22 @@ class Database:
             }
         return None
     
+    def get_user_by_driver_id(self, yandex_driver_id: str) -> Optional[Dict]:
+        """Получение информации о пользователе по yandex_driver_id"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+        SELECT user_id FROM users WHERE yandex_driver_id = ?
+        """, (yandex_driver_id,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            return {"user_id": row[0]}
+        return None
+    
     def get_referrals_for_order_check(self) -> List[Dict]:
         """Получение списка рефералов, зарегистрированных в парке, для проверки заказов"""
         conn = self.get_connection()
