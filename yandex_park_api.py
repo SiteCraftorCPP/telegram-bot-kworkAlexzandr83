@@ -187,6 +187,8 @@ class YandexParkAPI:
                 async with session.post(url, json=payload, headers=self.headers) as response:
                     response_text = await response.text()
                     
+                    logging.info(f"Driver {driver_id}: API ответ статус {response.status}, длина ответа: {len(response_text)}")
+                    
                     if response.status == 200:
                         try:
                             # Парсим JSON из текста ответа

@@ -911,7 +911,10 @@ async def show_referral_statistics(message: types.Message, state: FSMContext):
                     logging.warning(f"Пустой driver_id для user_id={referred_id}")
                     continue
                 
+                logging.info(f"Попытка получить заказы для user_id={referred_id}, driver_id={yandex_driver_id}")
                 orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
+                logging.info(f"Результат для user_id={referred_id}: orders_count={orders_count}")
+                
                 if orders_count is not None:
                     # Обновляем заказы в referrals
                     db.update_orders_count(referred_id, orders_count)
