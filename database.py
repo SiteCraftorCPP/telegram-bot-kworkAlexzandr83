@@ -288,7 +288,7 @@ class Database:
         cursor = conn.cursor()
         
         try:
-            # Обновляем в referrals
+            # Сначала пытаемся обновить существующую запись
             cursor.execute("""
             UPDATE referrals
             SET orders_count = ?
@@ -296,12 +296,38 @@ class Database:
             """, (orders_count, user_id))
             
             rows_affected = cursor.rowcount
+            
+            # Если запись не найдена, пытаемся найти referrer_id и создать запись
+            if rows_affected == 0:
+                # Ищем referrer_id для этого пользователя
+                cursor.execute("""
+                SELECT referrer_id FROM users WHERE user_id = ?
+                """, (user_id,))
+                user_row = cursor.fetchone()
+                
+                if user_row and user_row[0]:
+                    referrer_id = user_row[0]
+                    # Получаем park_position если есть
+                    cursor.execute("""
+                    SELECT park_position FROM users WHERE user_id = ?
+                    """, (user_id,))
+                    park_pos_row = cursor.fetchone()
+                    park_position = park_pos_row[0] if park_pos_row else None
+                    
+                    # Создаем запись в referrals
+                    cursor.execute("""
+                    INSERT OR REPLACE INTO referrals (referrer_id, referred_id, orders_count, park_position)
+                    VALUES (?, ?, ?, ?)
+                    """, (referrer_id, user_id, orders_count, park_position))
+                    rows_affected = cursor.rowcount
+                    logging.info(f"Created referral record for user {user_id} with orders_count {orders_count}")
+                else:
+                    logging.warning(f"No referrer_id found for user {user_id}, cannot create referral record")
+            
             conn.commit()
             
             if rows_affected > 0:
                 logging.info(f"Updated orders for user {user_id} to {orders_count} (rows affected: {rows_affected})")
-            else:
-                logging.warning(f"No rows updated for user {user_id} - возможно, запись не найдена в referrals")
             
             return True
         except Exception as e:
