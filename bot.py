@@ -818,11 +818,11 @@ async def update_all_orders(message: types.Message, state: FSMContext):
     
     msg = await message.answer("🔄 Обновляю данные о заказах для всех рефералов...\nЭто может занять некоторое время...")
     
-    # Получаем всех рефералов, зарегистрированных в парке
-    referrals_to_check = db.get_referrals_for_order_check()
+    # Получаем всех пользователей, зарегистрированных в парке (не только тех, кто в referrals)
+    referrals_to_check = db.get_all_park_users_for_order_check()
     
     if not referrals_to_check:
-        await msg.edit_text("⚠️ Не найдено рефералов для проверки (зарегистрированных в парке)")
+        await msg.edit_text("⚠️ Не найдено пользователей для проверки (зарегистрированных в парке)")
         return
     
     updated_count = 0
@@ -839,7 +839,26 @@ async def update_all_orders(message: types.Message, state: FSMContext):
             
             orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
             if orders_count is not None:
+                # Обновляем заказы в referrals
                 db.update_orders_count(referred_id, orders_count)
+                
+                # Если referrer_id есть, гарантируем что запись в referrals существует
+                if referral.get("referrer_id"):
+                    conn = db.get_connection()
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute("""
+                        INSERT OR IGNORE INTO referrals (referrer_id, referred_id, park_position)
+                        VALUES (?, ?, ?)
+                        """, (referral["referrer_id"], referred_id, referral.get("park_position")))
+                        # Обновляем orders_count в случае, если запись уже существовала
+                        cursor.execute("""
+                        UPDATE referrals SET orders_count = ? WHERE referred_id = ?
+                        """, (orders_count, referred_id))
+                        conn.commit()
+                    finally:
+                        conn.close()
+                
                 updated_count += 1
                 logging.info(f"Обновлены заказы для user_id={referred_id}, driver_id={yandex_driver_id}, заказов={orders_count}")
             else:
@@ -868,10 +887,10 @@ async def show_referral_statistics(message: types.Message, state: FSMContext):
     
     # Обновляем данные перед показом статистики
     msg = await message.answer("🔄 Обновляю данные о заказах...")
-    referrals_to_check = db.get_referrals_for_order_check()
+    referrals_to_check = db.get_all_park_users_for_order_check()
     
     if not referrals_to_check:
-        await msg.edit_text("⚠️ Не найдено рефералов для проверки (зарегистрированных в парке)")
+        await msg.edit_text("⚠️ Не найдено пользователей для проверки (зарегистрированных в парке)")
         await asyncio.sleep(2)
         await msg.delete()
     else:
@@ -889,7 +908,26 @@ async def show_referral_statistics(message: types.Message, state: FSMContext):
                 
                 orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
                 if orders_count is not None:
+                    # Обновляем заказы в referrals
                     db.update_orders_count(referred_id, orders_count)
+                    
+                    # Если referrer_id есть, гарантируем что запись в referrals существует
+                    if referral.get("referrer_id"):
+                        conn = db.get_connection()
+                        cursor = conn.cursor()
+                        try:
+                            cursor.execute("""
+                            INSERT OR IGNORE INTO referrals (referrer_id, referred_id, park_position)
+                            VALUES (?, ?, ?)
+                            """, (referral["referrer_id"], referred_id, referral.get("park_position")))
+                            # Обновляем orders_count в случае, если запись уже существовала
+                            cursor.execute("""
+                            UPDATE referrals SET orders_count = ? WHERE referred_id = ?
+                            """, (orders_count, referred_id))
+                            conn.commit()
+                        finally:
+                            conn.close()
+                    
                     updated_count += 1
                     logging.info(f"Обновлены заказы для user_id={referred_id}, driver_id={yandex_driver_id}, заказов={orders_count}")
                 else:

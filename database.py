@@ -186,11 +186,14 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         
+        # Получаем всех пользователей, зарегистрированных в парке, которые есть в referrals
         cursor.execute("""
-        SELECT r.referrer_id, r.referred_id, u.yandex_driver_id, r.park_position, r.orders_count, r.notification_sent
+        SELECT r.referrer_id, r.referred_id, u.yandex_driver_id, 
+               COALESCE(r.park_position, u.park_position) as park_position, 
+               r.orders_count, r.notification_sent
         FROM referrals r
         JOIN users u ON r.referred_id = u.user_id
-        WHERE u.is_registered_in_park = 1 AND u.yandex_driver_id IS NOT NULL
+        WHERE u.is_registered_in_park = 1 AND u.yandex_driver_id IS NOT NULL AND u.yandex_driver_id != ''
         """)
         
         rows = cursor.fetchall()
@@ -207,6 +210,48 @@ class Database:
             }
             for row in rows
         ]
+    
+    def get_all_park_users_for_order_check(self) -> List[Dict]:
+        """Получение всех пользователей, зарегистрированных в парке, для проверки заказов (не только рефералов)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # Получаем всех пользователей, зарегистрированных в парке
+        cursor.execute("""
+        SELECT u.user_id, u.yandex_driver_id, u.park_position
+        FROM users u
+        WHERE u.is_registered_in_park = 1 AND u.yandex_driver_id IS NOT NULL AND u.yandex_driver_id != ''
+        """)
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        result = []
+        for row in rows:
+            user_id = row[0]
+            yandex_driver_id = row[1]
+            park_position = row[2]
+            
+            # Получаем referrer_id из referrals, если есть
+            referrer_id = None
+            conn2 = self.get_connection()
+            cursor2 = conn2.cursor()
+            cursor2.execute("SELECT referrer_id FROM referrals WHERE referred_id = ? LIMIT 1", (user_id,))
+            ref_row = cursor2.fetchone()
+            if ref_row:
+                referrer_id = ref_row[0]
+            conn2.close()
+            
+            result.append({
+                "referrer_id": referrer_id,
+                "referred_id": user_id,
+                "yandex_driver_id": yandex_driver_id,
+                "park_position": park_position,
+                "orders_count": 0,
+                "notification_sent": 0
+            })
+        
+        return result
     
     def get_referrals(self, referrer_id: int) -> List[Dict]:
         """Получение списка приглашённых пользователей"""
