@@ -125,6 +125,7 @@ def get_admin_keyboard():
         KeyboardButton("🔍 Поиск по номеру"),
         KeyboardButton("📊 Статистика рефералов")
     )
+    keyboard.add(KeyboardButton("🔄 Обновить заказы"))
     keyboard.add(KeyboardButton("◀️ Назад"))
     return keyboard
 
@@ -424,7 +425,7 @@ async def process_photo(message: types.Message, state: FSMContext):
             f"• <b>1000 руб</b> — вам за каждого приглашённого\n"
             f"• <b>500 руб</b> — вашему другу\n\n"
             f"📋 <b>Условие выплаты:</b>\n"
-            f"При условии выполнения <b>45 заказов в тарифе экспресс</b> и <b>30 заказов в грузовом</b>\n\n"
+            f"При выполнении 45 заказов в тарифе «Экспресс» и 30 заказов в тарифе «Грузовой», Вы и Ваш друг получаете бонус.\n\n"
             f"Используйте кнопку <b>\"👥 Пригласить друзей\"</b> для получения вашей реферальной ссылки!"
         )
         
@@ -524,11 +525,31 @@ async def show_referral_link(message: types.Message, state: FSMContext):
         f"• 1000 руб — вам\n"
         f"• 500 руб — другу\n\n"
         f"📋 <b>Условие выплаты:</b>\n"
-        f"При условии выполнении <b>45 заказов экспресс</b> и <b>30 заказов в грузовом</b>\n\n"
+        f"При выполнении 45 заказов в тарифе «Экспресс» и 30 заказов в тарифе «Грузовой», Вы и Ваш друг получаете бонус.\n\n"
         f"Отправьте ссылку своим друзьям!"
     )
     
     await message.answer(referral_text, parse_mode="HTML")
+
+
+async def update_referrals_orders(user_id: int):
+    """Обновляет данные о заказах для рефералов пользователя"""
+    referrals = db.get_referrals(user_id)
+    updated_count = 0
+    
+    for ref in referrals:
+        user_ref = db.get_user(ref['user_id'])
+        if user_ref and user_ref.get('is_registered_in_park') and user_ref.get('yandex_driver_id'):
+            try:
+                orders_count = await yandex_api.get_driver_orders_count(user_ref['yandex_driver_id'])
+                if orders_count is not None:
+                    db.update_orders_count(ref['user_id'], orders_count)
+                    updated_count += 1
+                await asyncio.sleep(0.5)  # Небольшая задержка, чтобы не перегружать API
+            except Exception as e:
+                logging.error(f"Ошибка при обновлении заказов для {ref['user_id']}: {e}")
+    
+    return updated_count
 
 
 @dp.message_handler(lambda message: message.text == "👤 Профиль", state="*")
@@ -540,6 +561,14 @@ async def show_profile(message: types.Message, state: FSMContext):
     if not user:
         await message.answer("Сначала пройдите регистрацию, отправив /start")
         return
+    
+    # Обновляем данные о заказах перед показом профиля
+    msg = await message.answer("🔄 Обновляю данные о заказах...")
+    updated = await update_referrals_orders(user_id)
+    if updated > 0:
+        await msg.edit_text(f"✅ Обновлено данных: {updated}")
+        await asyncio.sleep(1)
+        await msg.delete()
     
     referrals = db.get_referrals(user_id)
     stats = db.get_user_stats(user_id)
@@ -570,11 +599,13 @@ async def show_profile(message: types.Message, state: FSMContext):
             
             orders_info = ""
             user_ref = db.get_user(ref['user_id'])
-            # Показываем заказы только если реферал зарегистрирован в парке
-            if user_ref and user_ref.get('is_registered_in_park'):
-                orders_count = ref.get('orders_count', 0)
-                
-                # Показываем только количество заказов без указания цели
+            # Показываем заказы если реферал зарегистрирован в парке ИЛИ если есть данные о заказах
+            orders_count = ref.get('orders_count', 0)
+            if user_ref and user_ref.get('is_registered_in_park') and orders_count > 0:
+                # Показываем количество заказов
+                orders_info = f"   📈 <b>Заказов: {orders_count}</b>\n"
+            elif orders_count > 0:
+                # Если есть данные о заказах, но пользователь не зарегистрирован в парке (старые данные)
                 orders_info = f"   📈 <b>Заказов: {orders_count}</b>\n"
 
             profile_text += (
@@ -772,6 +803,40 @@ async def admin_process_search_phone(message: types.Message, state: FSMContext):
         )
 
 
+@dp.message_handler(lambda message: message.text == "🔄 Обновить заказы", state="*")
+async def update_all_orders(message: types.Message, state: FSMContext):
+    """Обновить данные о заказах для всех рефералов"""
+    user_id = message.from_user.id
+    
+    if not db.is_admin(user_id):
+        await message.answer("У вас нет прав администратора")
+        return
+    
+    msg = await message.answer("🔄 Обновляю данные о заказах для всех рефералов...\nЭто может занять некоторое время...")
+    
+    # Получаем всех рефералов, зарегистрированных в парке
+    referrals_to_check = db.get_referrals_for_order_check()
+    updated_count = 0
+    
+    for referral in referrals_to_check:
+        referred_id = referral["referred_id"]
+        yandex_driver_id = referral["yandex_driver_id"]
+        
+        try:
+            orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
+            if orders_count is not None:
+                db.update_orders_count(referred_id, orders_count)
+                updated_count += 1
+            await asyncio.sleep(0.5)  # Задержка, чтобы не перегружать API
+        except Exception as e:
+            logging.error(f"Ошибка при обновлении заказов для {referred_id}: {e}")
+    
+    await msg.edit_text(
+        f"✅ Обновление завершено!\n\n"
+        f"📊 Обновлено записей: {updated_count} из {len(referrals_to_check)}"
+    )
+
+
 @dp.message_handler(lambda message: message.text == "📊 Статистика рефералов", state="*")
 async def show_referral_statistics(message: types.Message, state: FSMContext):
     """Показать статистику по рефералам"""
@@ -780,6 +845,29 @@ async def show_referral_statistics(message: types.Message, state: FSMContext):
     if not db.is_admin(user_id):
         await message.answer("У вас нет прав администратора")
         return
+    
+    # Обновляем данные перед показом статистики
+    msg = await message.answer("🔄 Обновляю данные о заказах...")
+    referrals_to_check = db.get_referrals_for_order_check()
+    updated_count = 0
+    
+    for referral in referrals_to_check:
+        referred_id = referral["referred_id"]
+        yandex_driver_id = referral["yandex_driver_id"]
+        
+        try:
+            orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
+            if orders_count is not None:
+                db.update_orders_count(referred_id, orders_count)
+                updated_count += 1
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logging.error(f"Ошибка при обновлении заказов для {referred_id}: {e}")
+    
+    if updated_count > 0:
+        await msg.edit_text(f"✅ Обновлено: {updated_count} записей")
+        await asyncio.sleep(1)
+        await msg.delete()
     
     referrals_data = db.get_referral_stats()
     
