@@ -181,7 +181,7 @@ class YandexParkAPI:
                             }
                         }
                     },
-                    "limit": 10000  # Увеличиваем лимит для получения всех заказов
+                    "limit": 500  # Максимальный лимит API - 500 заказов
                 }
                 
                 logging.info(f"Запрос заказов для driver_id={driver_id}, park_id={self.park_id}, url={url}")
