@@ -748,9 +748,21 @@ async def admin_process_search_phone(message: types.Message, state: FSMContext):
         if user_in_db.get('username'):
             report_text += f"📱 <b>Username:</b> @{user_in_db.get('username')}\n"
         
-        # Получаем количество заказов
-        user_id = user_in_db.get('user_id')
-        orders_count = db.get_user_orders_count(user_id) if user_id else 0
+        # Получаем количество заказов из API
+        orders_count = 0
+        driver_id = user_in_db.get('yandex_driver_id')
+        if driver_id:
+            try:
+                orders_count = await yandex_api.get_driver_orders_count(driver_id)
+                if orders_count is None:
+                    orders_count = 0
+                # Обновляем в БД
+                user_id = user_in_db.get('user_id')
+                if user_id:
+                    db.update_orders_count(user_id, orders_count)
+            except Exception as e:
+                logging.error(f"Ошибка при получении заказов из API для driver_id={driver_id}: {e}")
+        
         report_text += f"📈 <b>Выполнено заказов:</b> {orders_count}\n"
         
         if user_in_db.get('referrer_id'):
@@ -799,18 +811,22 @@ async def admin_process_search_phone(message: types.Message, state: FSMContext):
         report_text += "ℹ️ <i>Пользователь не зарегистрирован в боте</i>\n"
         report_text += "<i>(Зарегистрирован напрямую в Яндекс Парке)</i>\n"
         
-        # Пытаемся найти пользователя в базе по driver_id и получить количество заказов
+        # Получаем количество заказов из API
+        orders_count = 0
         driver_id = driver_in_park.get("driver_id")
         if driver_id:
-            user_by_driver = db.get_user_by_driver_id(driver_id)
-            if user_by_driver and user_by_driver.get("user_id"):
-                user_id = user_by_driver.get("user_id")
-                orders_count = db.get_user_orders_count(user_id)
-                report_text += f"📈 <b>Выполнено заказов:</b> {orders_count}\n"
-            else:
-                report_text += f"📈 <b>Выполнено заказов:</b> 0\n"
-        else:
-            report_text += f"📈 <b>Выполнено заказов:</b> 0\n"
+            try:
+                orders_count = await yandex_api.get_driver_orders_count(driver_id)
+                if orders_count is None:
+                    orders_count = 0
+                # Если пользователь найден в БД, обновляем запись
+                user_by_driver = db.get_user_by_driver_id(driver_id)
+                if user_by_driver and user_by_driver.get("user_id"):
+                    db.update_orders_count(user_by_driver.get("user_id"), orders_count)
+            except Exception as e:
+                logging.error(f"Ошибка при получении заказов из API для driver_id={driver_id}: {e}")
+        
+        report_text += f"📈 <b>Выполнено заказов:</b> {orders_count}\n"
         
         report_text += "\n"
 
