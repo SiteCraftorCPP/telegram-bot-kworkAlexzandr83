@@ -2,6 +2,7 @@ import aiohttp
 import asyncio
 import logging
 import json
+from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 
 class YandexParkAPI:
@@ -170,12 +171,21 @@ class YandexParkAPI:
                 url = f"{self.BASE_URL}/v1/parks/orders/list"
                 
                 # Получаем все заказы водителя
-                # API требует поле 'order' в запросе
+                # API требует либо booked_at, либо ended_at в order - используем ended_at для завершенных заказов
+                # Указываем большой диапазон дат для получения всех заказов
+                now = datetime.now()
+                year_ago = now - timedelta(days=365)  # За последний год
+                
                 payload = {
                     "query": {
                         "park": {
                             "id": self.park_id,
-                            "order": {},
+                            "order": {
+                                "ended_at": {
+                                    "from": year_ago.strftime("%Y-%m-%dT%H:%M:%S"),
+                                    "to": now.strftime("%Y-%m-%dT%H:%M:%S")
+                                }
+                            },
                             "driver_profile": {
                                 "id": driver_id
                             }
