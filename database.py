@@ -337,6 +337,23 @@ class Database:
         finally:
             conn.close()
     
+    def get_user_orders_count(self, user_id: int) -> int:
+        """Получение количества заказов пользователя"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+            SELECT orders_count FROM referrals WHERE referred_id = ?
+            """, (user_id,))
+            row = cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        except Exception as e:
+            logging.error(f"Ошибка при получении количества заказов для user_id {user_id}: {e}")
+            return 0
+        finally:
+            conn.close()
+    
     def update_user_park_position(self, user_id: int, park_position: str) -> bool:
         """Обновление позиции пользователя в парке"""
         conn = self.get_connection()

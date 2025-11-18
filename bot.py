@@ -121,10 +121,7 @@ def get_form_links_keyboard():
 def get_admin_keyboard():
     """Клавиатура админ-панели"""
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    keyboard.add(
-        KeyboardButton("🔍 Поиск по номеру"),
-        KeyboardButton("📊 Статистика рефералов")
-    )
+    keyboard.add(KeyboardButton("🔍 Поиск по номеру"))
     keyboard.add(KeyboardButton("🔄 Обновить заказы"))
     keyboard.add(KeyboardButton("◀️ Назад"))
     return keyboard
@@ -752,6 +749,11 @@ async def admin_process_search_phone(message: types.Message, state: FSMContext):
         if user_in_db.get('username'):
             report_text += f"📱 <b>Username:</b> @{user_in_db.get('username')}\n"
         
+        # Получаем количество заказов
+        user_id = user_in_db.get('user_id')
+        orders_count = db.get_user_orders_count(user_id) if user_id else 0
+        report_text += f"📈 <b>Выполнено заказов:</b> {orders_count}\n"
+        
         if user_in_db.get('referrer_id'):
             referrer = db.get_user(user_in_db.get('referrer_id'))
             if referrer:
@@ -875,133 +877,6 @@ async def update_all_orders(message: types.Message, state: FSMContext):
     if failed_count > 0:
         result_text += f"\n⚠️ Ошибок: {failed_count}"
     await msg.edit_text(result_text)
-
-
-@dp.message_handler(lambda message: message.text == "📊 Статистика рефералов", state="*")
-async def show_referral_statistics(message: types.Message, state: FSMContext):
-    """Показать статистику по рефералам"""
-    user_id = message.from_user.id
-    
-    if not db.is_admin(user_id):
-        await message.answer("У вас нет прав администратора")
-        return
-    
-    # Обновляем данные перед показом статистики
-    msg = await message.answer("🔄 Обновляю данные о заказах...")
-    referrals_to_check = db.get_all_park_users_for_order_check()
-    
-    if not referrals_to_check:
-        await msg.edit_text("⚠️ Не найдено пользователей для проверки (зарегистрированных в парке)")
-        await asyncio.sleep(2)
-        await msg.delete()
-    else:
-        updated_count = 0
-        failed_count = 0
-        
-        for i, referral in enumerate(referrals_to_check, 1):
-            referred_id = referral["referred_id"]
-            yandex_driver_id = referral["yandex_driver_id"]
-            
-            try:
-                # Обновляем сообщение о прогрессе
-                if i % 5 == 0 or i == 1:
-                    await msg.edit_text(f"🔄 Обновляю данные о заказах...\nОбработано: {i-1}/{len(referrals_to_check)}")
-                
-                if not yandex_driver_id:
-                    failed_count += 1
-                    logging.warning(f"Пустой driver_id для user_id={referred_id}")
-                    continue
-                
-                logging.info(f"Попытка получить заказы для user_id={referred_id}, driver_id={yandex_driver_id}")
-                orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
-                logging.info(f"Результат для user_id={referred_id}: orders_count={orders_count}")
-                
-                if orders_count is not None:
-                    # Обновляем заказы в referrals
-                    db.update_orders_count(referred_id, orders_count)
-                    
-                    # Если referrer_id есть, гарантируем что запись в referrals существует
-                    if referral.get("referrer_id"):
-                        conn = db.get_connection()
-                        cursor = conn.cursor()
-                        try:
-                            cursor.execute("""
-                            INSERT OR IGNORE INTO referrals (referrer_id, referred_id, park_position)
-                            VALUES (?, ?, ?)
-                            """, (referral["referrer_id"], referred_id, referral.get("park_position")))
-                            # Обновляем orders_count в случае, если запись уже существовала
-                            cursor.execute("""
-                            UPDATE referrals SET orders_count = ? WHERE referred_id = ?
-                            """, (orders_count, referred_id))
-                            conn.commit()
-                        finally:
-                            conn.close()
-                    
-                    updated_count += 1
-                    logging.info(f"Обновлены заказы для user_id={referred_id}, driver_id={yandex_driver_id}, заказов={orders_count}")
-                else:
-                    failed_count += 1
-                    logging.warning(f"Не удалось получить заказы для user_id={referred_id}, driver_id={yandex_driver_id} - API вернул None")
-                
-                # Увеличиваем задержку, чтобы избежать 429 ошибок (лимит API)
-                await asyncio.sleep(2.0)
-            except Exception as e:
-                failed_count += 1
-                logging.error(f"Ошибка при обновлении заказов для {referred_id}: {e}", exc_info=True)
-        
-        result_text = f"✅ Обновлено: {updated_count} из {len(referrals_to_check)}"
-        if failed_count > 0:
-            result_text += f"\n⚠️ Ошибок: {failed_count}"
-        await msg.edit_text(result_text)
-        await asyncio.sleep(1)  # Небольшая задержка, чтобы данные записались в БД
-        await msg.delete()
-    
-    # Получаем обновленные данные из БД
-    referrals_data = db.get_referral_stats()
-    
-    if not referrals_data:
-        await message.answer("📊 Пока нет данных по рефералам.")
-        return
-
-    # Логируем данные для отладки
-    logging.info(f"Получено {len(referrals_data)} записей статистики рефералов")
-    for ref in referrals_data[:3]:  # Логируем первые 3 для отладки
-        logging.info(f"Статистика: referrer={ref.get('referrer_full_name')}, referred={ref.get('referred_full_name')}, orders={ref.get('orders_count')}")
-
-    stats_text = f"📊 <b>Статистика по рефералам (всего: {len(referrals_data)})</b>\n\n"
-    
-    current_referrer_id = None
-    # Показываем не более 30 записей, чтобы не превысить лимит сообщения
-    for ref in referrals_data[:30]:
-        if ref['referrer_user_id'] != current_referrer_id:
-            current_referrer_id = ref['referrer_user_id']
-            stats_text += (
-                f"----------------------------------\n"
-                f"<b>Кто пригласил:</b> {ref['referrer_full_name']} "
-                f"(@{ref['referrer_username'] if ref['referrer_username'] else 'нет username'})\n\n"
-            )
-        
-        orders_count = ref.get('orders_count', 0)
-        if orders_count is None:
-            orders_count = 0
-        else:
-            orders_count = int(orders_count)
-        
-        stats_text += (
-            f"  ➡️ <b>Кого пригласил:</b> {ref['referred_full_name']} "
-            f"(@{ref['referred_username'] if ref['referred_username'] else 'нет username'})\n"
-            f"  📈 <b>Выполнено заказов:</b> {orders_count}\n\n"
-        )
-    
-    if len(referrals_data) > 30:
-        stats_text += f"\n... и ещё {len(referrals_data) - 30} записей."
-    
-    # Разбиваем на несколько сообщений, если текст слишком длинный
-    if len(stats_text) > 4096:
-        for i in range(0, len(stats_text), 4096):
-            await message.answer(stats_text[i:i + 4096], parse_mode="HTML")
-    else:
-        await message.answer(stats_text, parse_mode="HTML")
 
 
 @dp.message_handler(lambda message: message.text == "📈 Статистика", state="*")
