@@ -170,10 +170,12 @@ class YandexParkAPI:
                 url = f"{self.BASE_URL}/v1/parks/orders/list"
                 
                 # Получаем все заказы водителя
+                # API требует поле 'order' в запросе
                 payload = {
                     "query": {
                         "park": {
                             "id": self.park_id,
+                            "order": {},
                             "driver_profile": {
                                 "id": driver_id
                             }
