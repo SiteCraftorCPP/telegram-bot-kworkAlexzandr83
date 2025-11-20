@@ -136,7 +136,8 @@ async def send_goal_notification(referrer_id: int, referred_id: int, park_positi
 
 async def check_orders():
     """Основная функция для проверки заказов"""
-    logging.info("Starting order check cycle...")
+    logging.info("=" * 80)
+    logging.info("[CHECK_CYCLE] Starting order check cycle...")
     
     db = Database()
     yandex_api = YandexParkAPI(YANDEX_PARK_ID, YANDEX_API_KEY, YANDEX_CLIENT_ID)
@@ -144,27 +145,44 @@ async def check_orders():
     # Получаем всех рефералов, которых нужно проверить
     referrals_to_check = db.get_referrals_for_order_check()
     
-    if not referrals_to_check:
-        logging.info("No new referrals in park to check.")
-        return
-        
-    logging.info(f"Found {len(referrals_to_check)} referrals to check.")
+    logging.info(f"[CHECK_CYCLE] Метод get_referrals_for_order_check() вернул: {len(referrals_to_check)} записей")
     
-    for referral in referrals_to_check:
+    # Также логируем ВСЕХ пользователей в парке для отладки
+    all_park_users = db.get_all_park_users_for_order_check()
+    logging.info(f"[CHECK_CYCLE] Всего пользователей в парке (метод get_all_park_users_for_order_check): {len(all_park_users)}")
+    
+    if not referrals_to_check:
+        logging.warning("[CHECK_CYCLE] No referrals found in get_referrals_for_order_check()!")
+        logging.info("[CHECK_CYCLE] Проверяем альтернативный метод...")
+        
+        # Используем альтернативный метод, если основной не нашел записей
+        if all_park_users:
+            logging.info(f"[CHECK_CYCLE] Используем альтернативный список: {len(all_park_users)} пользователей")
+            referrals_to_check = all_park_users
+        else:
+            logging.info("[CHECK_CYCLE] Нет пользователей для проверки.")
+            return
+    
+    logging.info(f"[CHECK_CYCLE] Будет проверено {len(referrals_to_check)} пользователей")
+    
+    for idx, referral in enumerate(referrals_to_check, 1):
         referred_id = referral["referred_id"]
-        referrer_id = referral["referrer_id"]
+        referrer_id = referral.get("referrer_id")
         yandex_driver_id = referral["yandex_driver_id"]
         park_position = referral.get("park_position")
         current_orders_count = referral.get("orders_count", 0)
         notification_sent = referral.get("notification_sent", 0)
         
+        logging.info(f"[CHECK_{idx}/{len(referrals_to_check)}] Проверяем user_id={referred_id}, driver_id={yandex_driver_id}, referrer_id={referrer_id}")
+        
         try:
             # Если позиция не определена, пытаемся её определить
             if not park_position and yandex_driver_id:
+                logging.info(f"[CHECK_{idx}] Позиция не определена, определяем...")
                 park_position = await yandex_api.get_driver_position(yandex_driver_id)
                 if park_position:
                     db.update_user_park_position(referred_id, park_position)
-                    logging.info(f"Определена позиция для водителя {yandex_driver_id}: {park_position}")
+                    logging.info(f"[CHECK_{idx}] Определена позиция для водителя {yandex_driver_id}: {park_position}")
                     # Обновляем позицию в referrals
                     conn = db.get_connection()
                     cursor = conn.cursor()
@@ -177,40 +195,53 @@ async def check_orders():
                         conn.commit()
                     finally:
                         conn.close()
+                else:
+                    logging.warning(f"[CHECK_{idx}] Не удалось определить позицию для {yandex_driver_id}")
             
             # Получаем количество заказов из API
+            logging.info(f"[CHECK_{idx}] Запрашиваем заказы из API для driver_id={yandex_driver_id}...")
             orders_count = await yandex_api.get_driver_orders_count(yandex_driver_id)
             
             if orders_count is not None:
-                logging.info(f"Driver {yandex_driver_id} (user {referred_id}) has {orders_count} orders.")
+                logging.info(f"[CHECK_{idx}] ✓ Driver {yandex_driver_id} (user {referred_id}): получено {orders_count} заказов (было в БД: {current_orders_count})")
                 
                 # Обновляем количество заказов в БД
-                db.update_orders_count(referred_id, orders_count)
+                update_success = db.update_orders_count(referred_id, orders_count)
+                if update_success:
+                    logging.info(f"[CHECK_{idx}] ✓ Обновлено в БД: user_id={referred_id}, orders_count={orders_count}")
+                else:
+                    logging.error(f"[CHECK_{idx}] ✗ Не удалось обновить БД для user_id={referred_id}")
                 
                 # Проверяем, достиг ли реферал нужного числа заказов
                 if park_position and park_position in ORDERS_THRESHOLD:
                     threshold = ORDERS_THRESHOLD[park_position]
+                    logging.info(f"[CHECK_{idx}] Проверка порога: {orders_count} >= {threshold}? notification_sent={notification_sent}")
                     
                     # Если достигнута цель и уведомление еще не отправлялось
-                    if orders_count >= threshold and not notification_sent:
-                        logging.info(f"Реферал {referred_id} достиг цели: {orders_count} заказов (требуется {threshold} для {park_position})")
+                    if orders_count >= threshold and not notification_sent and referrer_id:
+                        logging.info(f"[CHECK_{idx}] 🎉 Реферал {referred_id} достиг цели: {orders_count} заказов (требуется {threshold} для {park_position})")
                         
                         # Отправляем уведомление в канал
                         await send_goal_notification(referrer_id, referred_id, park_position, orders_count)
                         
                         # Отмечаем, что уведомление отправлено
                         db.mark_notification_sent(referrer_id, referred_id)
-                        
+                    elif not referrer_id:
+                        logging.warning(f"[CHECK_{idx}] Пользователь {referred_id} достиг порога, но нет referrer_id")
+                else:
+                    logging.warning(f"[CHECK_{idx}] Позиция не определена или не в пороговых значениях: park_position={park_position}")
             else:
-                logging.warning(f"Could not get orders count for driver {yandex_driver_id} (user {referred_id}).")
+                logging.warning(f"[CHECK_{idx}] ✗ Could not get orders count for driver {yandex_driver_id} (user {referred_id}). API вернул None.")
         
         except Exception as e:
-            logging.error(f"Error checking orders for driver {yandex_driver_id}: {e}", exc_info=True)
+            logging.error(f"[CHECK_{idx}] ✗ Error checking orders for driver {yandex_driver_id}: {e}", exc_info=True)
         
         # Небольшая задержка, чтобы не перегружать API
-        await asyncio.sleep(1)
+        await asyncio.sleep(1.5)
     
-    logging.info("Order check cycle finished.")
+    logging.info("=" * 80)
+    logging.info("[CHECK_CYCLE] Order check cycle finished.")
+    logging.info("=" * 80)
 
 async def main():
     """Запускает цикл проверки заказов каждые N секунд"""

@@ -154,7 +154,7 @@ class YandexParkAPI:
     
     async def get_driver_orders_count(self, driver_id: str) -> Optional[int]:
         """
-        Получает количество выполненных заказов водителя
+        Получает количество выполненных заказов водителя с пагинацией и fallback-стратегиями
         
         Args:
             driver_id: ID водителя
@@ -167,83 +167,176 @@ class YandexParkAPI:
                 logging.warning("get_driver_orders_count: driver_id пустой или None")
                 return None
             
+            # Очищаем driver_id от пробелов
+            driver_id = str(driver_id).strip()
+            
             async with aiohttp.ClientSession() as session:
                 url = f"{self.BASE_URL}/v1/parks/orders/list"
                 
-                # Получаем все заказы водителя
-                # API требует либо booked_at, либо ended_at в order - используем ended_at для завершенных заказов
-                # Указываем большой диапазон дат для получения всех заказов
-                # API требует формат ISO 8601 с временной зоной (UTC) и миллисекундами
+                # Указываем большой диапазон дат для получения ВСЕХ заказов (за 5 лет)
                 from datetime import timezone
                 now = datetime.now(timezone.utc)
-                year_ago = now - timedelta(days=365)  # За последний год
+                five_years_ago = now - timedelta(days=1825)  # 5 лет для гарантии
                 
-                # Форматируем даты в правильный ISO 8601 формат с UTC
-                # Используем isoformat() который дает правильный формат: 2024-11-18T17:31:00+00:00
-                # Но API может требовать формат с Z, поэтому заменяем +00:00 на Z
-                from_str = year_ago.isoformat().replace('+00:00', 'Z')
+                from_str = five_years_ago.isoformat().replace('+00:00', 'Z')
                 to_str = now.isoformat().replace('+00:00', 'Z')
                 
-                payload = {
-                    "query": {
-                        "park": {
-                            "id": self.park_id,
-                            "order": {
-                                "ended_at": {
-                                    "from": from_str,
-                                    "to": to_str
+                total_orders = 0
+                cursor = None
+                page = 1
+                
+                logging.info(f"[ORDERS_CHECK] Начинаем проверку заказов для driver_id={driver_id}, park_id={self.park_id}")
+                logging.info(f"[ORDERS_CHECK] Диапазон дат: {from_str} - {to_str}")
+                
+                # Получаем все заказы с пагинацией
+                while True:
+                    payload = {
+                        "query": {
+                            "park": {
+                                "id": self.park_id,
+                                "order": {
+                                    "ended_at": {
+                                        "from": from_str,
+                                        "to": to_str
+                                    }
+                                },
+                                "driver_profile": {
+                                    "id": driver_id
                                 }
-                            },
-                            "driver_profile": {
-                                "id": driver_id
                             }
-                        }
-                    },
-                    "limit": 500  # Максимальный лимит API - 500 заказов
-                }
-                
-                logging.info(f"Запрос заказов для driver_id={driver_id}, park_id={self.park_id}, url={url}")
-                
-                async with session.post(url, json=payload, headers=self.headers) as response:
-                    response_text = await response.text()
+                        },
+                        "limit": 500  # Максимальный лимит API - 500 заказов за запрос
+                    }
                     
-                    logging.info(f"Driver {driver_id}: API ответ статус {response.status}, длина ответа: {len(response_text)}")
+                    # Добавляем cursor для пагинации (если есть)
+                    if cursor:
+                        payload["cursor"] = cursor
                     
-                    if response.status == 200:
-                        try:
-                            # Парсим JSON из текста ответа
-                            data = json.loads(response_text)
-                            orders = data.get("orders", [])
+                    logging.info(f"[ORDERS_CHECK] Driver {driver_id}, страница {page}, payload: {json.dumps(payload, ensure_ascii=False)[:200]}")
+                    
+                    try:
+                        async with session.post(url, json=payload, headers=self.headers) as response:
+                            response_text = await response.text()
                             
-                            # Логируем структуру ответа для отладки
-                            logging.info(f"Driver {driver_id}: API ответ статус 200, получено заказов в массиве: {len(orders)}")
+                            logging.info(f"[ORDERS_CHECK] Driver {driver_id}, страница {page}: HTTP {response.status}, длина ответа {len(response_text)}")
                             
-                            # Проверяем структуру ответа
-                            if "orders" not in data:
-                                logging.warning(f"Driver {driver_id}: в ответе нет ключа 'orders'. Структура ответа: {list(data.keys())[:10]}")
-                                logging.warning(f"Driver {driver_id}: полный ответ API (первые 1000 символов): {response_text[:1000]}")
-                            
-                            if len(orders) == 0:
-                                logging.warning(f"Driver {driver_id}: массив заказов пустой. Полный ответ API: {response_text[:1000]}")
-                                # Возвращаем 0, а не None, если массив пустой (это валидный результат)
-                                return 0
-                            
-                            # Считаем все заказы (API возвращает только выполненные/активные)
-                            # Если нужны только завершенные, фильтруем по статусу
-                            completed_orders = [o for o in orders if o.get("status") in ["complete", "finished"]]
-                            # Если нет завершенных, считаем все (возможно API уже возвращает только завершенные)
-                            count = len(completed_orders) if completed_orders else len(orders)
-                            logging.info(f"Driver {driver_id}: всего заказов в ответе {len(orders)}, завершенных {len(completed_orders)}, итого: {count}")
-                            return count
-                        except Exception as parse_error:
-                            logging.error(f"Driver {driver_id}: ошибка парсинга ответа API: {parse_error}, ответ: {response_text[:500]}")
-                            return None
-                    else:
-                        logging.warning(f"Не удалось получить заказы для {driver_id}: статус {response.status}, ошибка: {response_text[:500]}")
+                            if response.status == 200:
+                                try:
+                                    data = json.loads(response_text)
+                                    orders = data.get("orders", [])
+                                    
+                                    logging.info(f"[ORDERS_CHECK] Driver {driver_id}, страница {page}: получено {len(orders)} заказов из API")
+                                    
+                                    # Логируем структуру первого заказа для понимания формата
+                                    if page == 1 and orders:
+                                        first_order_keys = list(orders[0].keys()) if orders else []
+                                        logging.info(f"[ORDERS_CHECK] Driver {driver_id}: структура заказа (ключи): {first_order_keys}")
+                                        if orders:
+                                            statuses = [o.get("status") for o in orders[:5]]
+                                            logging.info(f"[ORDERS_CHECK] Driver {driver_id}: примеры статусов: {statuses}")
+                                    
+                                    if len(orders) == 0:
+                                        if page == 1:
+                                            logging.warning(f"[ORDERS_CHECK] Driver {driver_id}: API вернул пустой массив заказов на первой странице!")
+                                            logging.warning(f"[ORDERS_CHECK] Полный ответ API: {response_text[:1000]}")
+                                        break
+                                    
+                                    # Считаем ВСЕ заказы, так как API должен возвращать только завершенные
+                                    # Но на всякий случай исключаем cancelled
+                                    completed = [o for o in orders if o.get("status") != "cancelled"]
+                                    
+                                    page_count = len(completed)
+                                    total_orders += page_count
+                                    
+                                    logging.info(f"[ORDERS_CHECK] Driver {driver_id}, страница {page}: учтено {page_count} заказов (всего {len(orders)}), общий счетчик: {total_orders}")
+                                    
+                                    # Проверяем, есть ли следующая страница
+                                    cursor = data.get("cursor")
+                                    if not cursor or len(orders) < 500:
+                                        logging.info(f"[ORDERS_CHECK] Driver {driver_id}: это последняя страница (cursor={cursor}, orders={len(orders)})")
+                                        break
+                                    
+                                    page += 1
+                                    
+                                    # Защита от бесконечного цикла
+                                    if page > 50:
+                                        logging.warning(f"[ORDERS_CHECK] Driver {driver_id}: достигнут лимит страниц (50), прерываем. Текущий счетчик: {total_orders}")
+                                        break
+                                    
+                                    # Небольшая задержка между запросами
+                                    await asyncio.sleep(0.3)
+                                    
+                                except json.JSONDecodeError as json_error:
+                                    logging.error(f"[ORDERS_CHECK] Driver {driver_id}: ошибка парсинга JSON: {json_error}, ответ: {response_text[:500]}")
+                                    return total_orders if total_orders > 0 else None
+                            else:
+                                logging.error(f"[ORDERS_CHECK] Driver {driver_id}, страница {page}: HTTP {response.status}, ошибка: {response_text[:1000]}")
+                                # Если это не первая страница, возвращаем то что есть
+                                if page > 1:
+                                    return total_orders
+                                # Если первая страница с ошибкой - пробуем fallback
+                                return await self._get_orders_count_fallback(session, driver_id)
+                    
+                    except aiohttp.ClientError as client_error:
+                        logging.error(f"[ORDERS_CHECK] Driver {driver_id}: ошибка HTTP клиента: {client_error}")
+                        if page > 1:
+                            return total_orders
                         return None
+                
+                logging.info(f"[ORDERS_CHECK] Driver {driver_id}: ИТОГО заказов = {total_orders}")
+                return total_orders
                         
         except Exception as e:
-            logging.error(f"Ошибка при получении заказов для {driver_id}: {e}", exc_info=True)
+            logging.error(f"[ORDERS_CHECK] Ошибка при получении заказов для {driver_id}: {e}", exc_info=True)
+            return None
+    
+    async def _get_orders_count_fallback(self, session: aiohttp.ClientSession, driver_id: str) -> Optional[int]:
+        """
+        Fallback-метод: пытаемся получить заказы через booked_at вместо ended_at
+        """
+        try:
+            logging.info(f"[ORDERS_FALLBACK] Пробуем fallback для driver_id={driver_id}")
+            
+            url = f"{self.BASE_URL}/v1/parks/orders/list"
+            
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+            five_years_ago = now - timedelta(days=1825)
+            
+            from_str = five_years_ago.isoformat().replace('+00:00', 'Z')
+            to_str = now.isoformat().replace('+00:00', 'Z')
+            
+            payload = {
+                "query": {
+                    "park": {
+                        "id": self.park_id,
+                        "order": {
+                            "booked_at": {  # Используем booked_at вместо ended_at
+                                "from": from_str,
+                                "to": to_str
+                            }
+                        },
+                        "driver_profile": {
+                            "id": driver_id
+                        }
+                    }
+                },
+                "limit": 500
+            }
+            
+            async with session.post(url, json=payload, headers=self.headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    orders = data.get("orders", [])
+                    completed = [o for o in orders if o.get("status") != "cancelled"]
+                    count = len(completed)
+                    logging.info(f"[ORDERS_FALLBACK] Driver {driver_id}: получено {count} заказов через fallback")
+                    return count
+                else:
+                    logging.warning(f"[ORDERS_FALLBACK] Driver {driver_id}: fallback failed with status {response.status}")
+                    return None
+        except Exception as e:
+            logging.error(f"[ORDERS_FALLBACK] Ошибка fallback для {driver_id}: {e}")
             return None
     
     async def get_driver_position(self, driver_id: str) -> Optional[str]:

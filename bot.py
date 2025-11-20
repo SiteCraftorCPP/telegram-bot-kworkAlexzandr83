@@ -259,8 +259,8 @@ async def process_phone(message: types.Message, state: FSMContext):
             park_position = await yandex_api.get_driver_position(driver_id)
             logging.info(f"Определена позиция водителя {driver_id}: {park_position}")
         
-        # Если пользователь уже в парке, не учитываем его как реферала (referrer_id=None)
-        # Но если пользователь регистрируется по реферальной ссылке и уже в парке, нужно учитывать его позицию
+        # Сохраняем пользователя с реферальной информацией
+        # ВАЖНО: referrer_id НЕ обнуляем, даже если пользователь уже в парке
         db.add_user(
             user_id=user_info["id"],
             username=user_info["username"],
@@ -268,7 +268,7 @@ async def process_phone(message: types.Message, state: FSMContext):
             first_name=user_info["first_name"],
             phone_number=cleaned_phone,
             category=None,
-            referrer_id=None,  # Не учитываем реферала для пользователей, уже зарегистрированных в парке
+            referrer_id=referrer_id,  # Сохраняем реферала, даже если пользователь уже в парке
             is_registered_in_park=True,
             yandex_driver_id=driver_id,
             yandex_driver_name=driver_name,
@@ -276,7 +276,7 @@ async def process_phone(message: types.Message, state: FSMContext):
         )
         
         # Если есть реферер И пользователь уже в парке, создаем запись реферала с позицией
-        if referrer_id and park_position:
+        if referrer_id:
             # Создаем запись в referrals для отслеживания позиции и заказов
             conn = db.get_connection()
             cursor = conn.cursor()
