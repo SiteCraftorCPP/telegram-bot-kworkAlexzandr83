@@ -748,20 +748,35 @@ async def admin_process_search_phone(message: types.Message, state: FSMContext):
         if user_in_db.get('username'):
             report_text += f"📱 <b>Username:</b> @{user_in_db.get('username')}\n"
         
-        # Получаем количество заказов из API
+        # Получаем количество заказов НАПРЯМУЮ из API (ВСЕГДА берем driver_id из парка, а не из БД)
         orders_count = 0
-        driver_id = user_in_db.get('yandex_driver_id')
+        driver_id = None
+        
+        # Приоритет 1: driver_id из API парка (самый актуальный)
+        if driver_in_park and driver_in_park.get("found"):
+            driver_id = driver_in_park.get("driver_id")
+        # Приоритет 2: driver_id из БД (если парк не вернул)
+        elif user_in_db.get('yandex_driver_id'):
+            driver_id = user_in_db.get('yandex_driver_id')
+        
         if driver_id:
             try:
+                logging.info(f"[ADMIN_SEARCH] Запрос заказов для driver_id={driver_id}, phone={normalized_phone}")
                 orders_count = await yandex_api.get_driver_orders_count(driver_id)
                 if orders_count is None:
                     orders_count = 0
+                    logging.warning(f"[ADMIN_SEARCH] API вернул None для driver_id={driver_id}")
+                else:
+                    logging.info(f"[ADMIN_SEARCH] Получено {orders_count} заказов для driver_id={driver_id}")
+                
                 # Обновляем в БД
                 user_id = user_in_db.get('user_id')
                 if user_id:
                     db.update_orders_count(user_id, orders_count)
             except Exception as e:
-                logging.error(f"Ошибка при получении заказов из API для driver_id={driver_id}: {e}")
+                logging.error(f"[ADMIN_SEARCH] Ошибка при получении заказов из API для driver_id={driver_id}: {e}", exc_info=True)
+        else:
+            logging.warning(f"[ADMIN_SEARCH] driver_id не найден ни в парке, ни в БД для phone={normalized_phone}")
         
         report_text += f"📈 <b>Выполнено заказов:</b> {orders_count}\n"
         
@@ -788,11 +803,23 @@ async def admin_process_search_phone(message: types.Message, state: FSMContext):
                 report_text += f"<i>(найдено: {len(invited_users)})</i>\n"
                 for i, ref in enumerate(invited_users, 1):
                     phone_display = ref.get('phone_number') if ref.get('phone_number') else 'не указан'
-                    orders_count = ref.get('orders_count')
-                    if orders_count is None:
-                        orders_count = 0
-                    else:
-                        orders_count = int(orders_count)
+                    
+                    # Получаем актуальные заказы из API для каждого приглашенного
+                    orders_count = 0
+                    ref_phone = ref.get('phone_number')
+                    if ref_phone:
+                        try:
+                            # Ищем driver_id через API парка
+                            ref_driver_info = await yandex_api.check_driver_by_phone(ref_phone)
+                            if ref_driver_info and ref_driver_info.get("found"):
+                                ref_driver_id = ref_driver_info.get("driver_id")
+                                if ref_driver_id:
+                                    orders_count = await yandex_api.get_driver_orders_count(ref_driver_id)
+                                    if orders_count is None:
+                                        orders_count = 0
+                                    logging.info(f"[ADMIN_SEARCH] Приглашенный {ref.get('full_name')}: {orders_count} заказов")
+                        except Exception as e:
+                            logging.error(f"[ADMIN_SEARCH] Ошибка получения заказов для приглашенного {ref_phone}: {e}")
                     
                     report_text += (
                         f"{i}. {ref.get('full_name')} (@{ref.get('username', '-')})\n"
