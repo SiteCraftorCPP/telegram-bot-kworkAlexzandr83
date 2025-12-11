@@ -106,6 +106,7 @@ def get_admin_keyboard():
     """Клавиатура админ-панели"""
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     keyboard.add(KeyboardButton("🔍 Поиск по номеру"))
+    keyboard.add(KeyboardButton("📋 Все рефералы"))
     keyboard.add(KeyboardButton("◀️ Назад"))
     return keyboard
 
@@ -576,6 +577,45 @@ async def show_profile(message: types.Message, state: FSMContext):
     await message.answer(profile_text, parse_mode="HTML")
 
 
+def format_position_line(user: dict) -> str:
+    """Возвращает строку позиции/категории пользователя"""
+    pos = user.get("park_position") if user else None
+    cat = user.get("category") if user else None
+    if pos == "cargo":
+        return "🏷️ Позиция: Грузовой"
+    if pos == "express":
+        return "🏷️ Позиция: Экспресс"
+    if cat:
+        info = DOCUMENT_REQUIREMENTS.get(cat, {})
+        name = info.get("name", cat)
+        emoji = info.get("emoji", "🏷️")
+        return f"{emoji} Позиция: {name}"
+    return "🏷️ Позиция: не указана"
+
+
+async def fetch_orders_live(user: dict) -> int:
+    """Получает актуальное число заказов из Яндекс Парка, обновляет БД, возвращает число"""
+    if not user:
+        return 0
+    driver_id = user.get("yandex_driver_id")
+    phone = user.get("phone_number")
+    orders = 0
+    try:
+        if user.get("is_registered_in_park") and driver_id:
+            orders = await yandex_api.get_driver_orders_count(driver_id) or 0
+        elif phone:
+            info = await yandex_api.check_driver_by_phone(phone)
+            if info and info.get("found"):
+                driver_id = info.get("driver_id")
+                orders = await yandex_api.get_driver_orders_count(driver_id) or 0
+        if user.get("user_id"):
+            db.update_orders_count(user["user_id"], orders)
+    except Exception as e:
+        logging.error(f"[ADMIN_REFERRALS] Ошибка получения заказов для user {user.get('user_id')}: {e}", exc_info=True)
+    await asyncio.sleep(0.3)  # чуть притормозить, чтобы не ловить 429
+    return orders
+
+
 @dp.message_handler(lambda message: message.text == "⚙️ Админ-панель", state="*")
 async def show_admin_panel(message: types.Message, state: FSMContext):
     """Админ-панель"""
@@ -777,6 +817,67 @@ async def admin_process_search_phone(message: types.Message, state: FSMContext):
             f"❌ Ошибка при формировании отчета. Попробуйте еще раз.\n\nОшибка: {str(e)}",
             reply_markup=get_admin_keyboard()
         )
+
+
+@dp.message_handler(lambda message: message.text == "📋 Все рефералы", state="*")
+async def show_all_referrals(message: types.Message, state: FSMContext):
+    """Показать всех рефералов с актуальными заказами и пригласившим"""
+    if not db.is_admin(message.from_user.id):
+        return
+    
+    await message.answer("🔄 Загружаю актуальные данные по рефералам...")
+    
+    try:
+        stats = db.get_referral_stats()
+        if not stats:
+            await message.answer("ℹ️ Рефералов пока нет.", reply_markup=get_admin_keyboard())
+            return
+        
+        blocks = []
+        for rec in stats:
+            # Получаем пользователей
+            referred = db.get_user(rec.get("referred_user_id"))
+            referrer = db.get_user(rec.get("referrer_user_id"))
+            
+            # Актуальное количество заказов для реферала
+            orders = await fetch_orders_live(referred)
+            
+            # Позиции
+            pos_referred = format_position_line(referred)
+            pos_referrer = format_position_line(referrer)
+            
+            # Телефоны
+            phone_referred = referred.get("phone_number") if referred else "не указан"
+            phone_referrer = referrer.get("phone_number") if referrer else "не указан"
+            
+            # Username links
+            def uname_link(u):
+                if u and u.get("username"):
+                    return f"@{u.get('username')}"
+                if u and u.get("user_id"):
+                    return f'<a href="tg://user?id={u.get("user_id")}">профиль</a>'
+                return "нет username"
+            
+            block = "\n".join([
+                pos_referred,
+                f"👤 Имя в Telegram: {referred.get('full_name') if referred else 'Не указано'}",
+                f"📱 Username: {uname_link(referred)}",
+                f"📞 Телефон: {phone_referred}",
+                f"📈 Заказов: {orders}",
+                "",
+                "👥 Пользователя пригласил:",
+                pos_referrer,
+                f"👤 Имя в Telegram: {referrer.get('full_name') if referrer else 'Не указано'}",
+                f"📱 Username: {uname_link(referrer)}",
+                f"📞 Телефон: {phone_referrer}",
+            ])
+            blocks.append(block)
+        
+        text = "📋 <b>Все рефералы</b>\n\n" + "\n\n---\n\n".join(blocks)
+        await message.answer(text, parse_mode="HTML", reply_markup=get_admin_keyboard())
+    except Exception as e:
+        logging.error(f"[ADMIN_REFERRALS] Ошибка при показе списка: {e}", exc_info=True)
+        await message.answer("❌ Ошибка при загрузке рефералов.", reply_markup=get_admin_keyboard())
 
 
 @dp.message_handler(lambda message: message.text == "📈 Статистика", state="*")
