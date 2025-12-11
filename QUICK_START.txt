@@ -80,3 +80,4 @@ sqlite3 bot.db "SELECT user_id, phone_number, yandex_driver_id FROM users WHERE 
 
 ═══════════════════════════════════════════════════════════════
 
+

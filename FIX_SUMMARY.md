@@ -170,3 +170,4 @@ python3 order_checker.py 2>&1 | tee -a order_checker_new.log
 **Исправленные файлы:** bot.py, yandex_park_api.py, order_checker.py  
 **Статус:** Готово к деплою на VPS
 
+

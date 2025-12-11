@@ -28,7 +28,6 @@ yandex_api = YandexParkAPI(YANDEX_PARK_ID, YANDEX_API_KEY, YANDEX_CLIENT_ID)
 class RegistrationStates(StatesGroup):
     waiting_for_phone = State()
     waiting_for_category = State()
-    waiting_for_documents = State()
 
 class AdminStates(StatesGroup):
     viewing_users = State()
@@ -44,32 +43,16 @@ DOCUMENT_REQUIREMENTS = {
     "truck_driver": {
         "name": "Водитель грузового авто",
         "emoji": "🚛",
-        "text": "📋 Для регистрации в качестве <b>водителя грузового авто</b> отправьте следующие документы:\n\n"
-               "1️⃣ Паспорт (разворот с фото - 2 страницы)\n"
-               "2️⃣ Свидетельство о регистрации транспортного средства\n"
-               "3️⃣ Водительское удостоверение (обе стороны)\n\n"
-               "📸 Отправьте все фото одним сообщением",
-        "required_count": 4,
         "orders_required": 30  # Для грузового
     },
     "car_courier": {
         "name": "Курьер на авто",
         "emoji": "🚗",
-        "text": "📋 Для регистрации в качестве <b>курьера на авто</b> отправьте следующие документы:\n\n"
-               "1️⃣ Паспорт (разворот с фото - 2 страницы)\n"
-               "2️⃣ Свидетельство о регистрации транспортного средства\n"
-               "3️⃣ Водительское удостоверение (обе стороны)\n\n"
-               "📸 Отправьте все фото одним сообщением",
-        "required_count": 4,
         "orders_required": 45  # Для легкового
     },
     "foot_courier": {
         "name": "Пеший курьер",
         "emoji": "🚶",
-        "text": "📋 Для регистрации в качестве <b>пешего курьера</b> отправьте следующие документы:\n\n"
-               "1️⃣ Паспорт (разворот с фото - 2 страницы)\n\n"
-               "📸 Отправьте обе страницы паспорта.",
-        "required_count": 2,
         "orders_required": 45
     }
 }
@@ -79,9 +62,10 @@ def get_main_menu_keyboard(is_admin=False):
     """Главное меню с кнопками"""
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     keyboard.add(
-        KeyboardButton("👤 Профиль"),
+        KeyboardButton("🚀 Начать работать"),
         KeyboardButton("👥 Пригласить друзей")
     )
+    keyboard.add(KeyboardButton("👤 Профиль"))
     if is_admin:
         keyboard.add(KeyboardButton("⚙️ Админ-панель"))
     return keyboard
@@ -172,7 +156,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
     # Инициализируем данные нового пользователя
     user_data[user.id] = {
         "category": None,
-        "photos": [],
         "phone_number": None,
         "referrer_id": referrer_id,
         "user_info": {
@@ -233,7 +216,18 @@ async def process_phone(message: types.Message, state: FSMContext):
     checking_msg = await message.answer("🔍 Проверяю регистрацию в Яндекс Парке...")
     
     # Проверяем в Яндекс Парке
-    driver_info = await yandex_api.check_driver_by_phone(cleaned_phone)
+    # Ограничиваем ожидание ответа от API, чтобы бот не "висел" надолго
+    try:
+        driver_info = await asyncio.wait_for(
+            yandex_api.check_driver_by_phone(cleaned_phone),
+            timeout=10.0
+        )
+    except asyncio.TimeoutError:
+        logging.warning("Timeout while checking driver in Yandex Park")
+        driver_info = {"found": False, "error": "timeout"}
+    except Exception as e:
+        logging.error(f"Error while checking driver: {e}")
+        driver_info = {"found": False, "error": str(e)}
     
     if driver_info and driver_info.get("found"):
         # Водитель найден в парке
@@ -323,177 +317,143 @@ async def process_phone(message: types.Message, state: FSMContext):
         await state.finish()
         
     else:
-        # Водитель не найден, продолжаем регистрацию
-        await checking_msg.edit_text(
-            "📋 <b>Вы ещё не зарегистрированы в Яндекс Парке</b>\n\n"
-            "Выберите категорию для регистрации:",
-            parse_mode="HTML"
-        )
-        
-        await message.answer(
-            "Выберите вашу категорию:",
-            reply_markup=get_category_keyboard()
-        )
-        await RegistrationStates.waiting_for_category.set()
-
-
-@dp.callback_query_handler(lambda c: c.data.startswith("category:"), state=RegistrationStates.waiting_for_category)
-async def process_category_selection(callback_query: types.CallbackQuery, state: FSMContext):
-    """Обработчик выбора категории"""
-    await callback_query.answer()
-    
-    user_id = callback_query.from_user.id
-    category = callback_query.data.split(":")[1]
-    
-    if user_id not in user_data:
-        user_data[user_id] = {"photos": [], "user_info": {}}
-    
-    user_data[user_id]["category"] = category
-    doc_info = DOCUMENT_REQUIREMENTS[category]
-    
-    await callback_query.message.edit_text(
-        text=doc_info["text"],
-        parse_mode="HTML"
-    )
-    
-    await RegistrationStates.waiting_for_documents.set()
-
-
-@dp.message_handler(content_types=types.ContentType.PHOTO, state=RegistrationStates.waiting_for_documents)
-async def process_photo(message: types.Message, state: FSMContext):
-    """Обработчик получения фото документов"""
-    user_id = message.from_user.id
-    
-    if user_id not in user_data:
-        await message.answer("Произошла ошибка. Пожалуйста, начните сначала с команды /start")
-        await state.finish()
-        return
-    
-    # Сохраняем фото
-    photo = message.photo[-1]
-    user_data[user_id]["photos"].append(photo.file_id)
-    
-    category = user_data[user_id]["category"]
-    required_count = DOCUMENT_REQUIREMENTS[category]["required_count"]
-    current_count = len(user_data[user_id]["photos"])
-    
-    # Проверяем, собрали ли мы все документы
-    if current_count < required_count:
-        # НЕ отправляем промежуточное сообщение
-        pass
-    else:
-        # Проверяем, не был ли уже сохранён пользователь (защита от дублирования)
-        if user_data[user_id].get("registered", False):
-            return  # Пользователь уже зарегистрирован, игнорируем повторную отправку
-        
-        # Все документы собраны
-        await message.answer(
-            "✅ Все документы получены!\n"
-            "Отправляем информацию на проверку..."
-        )
-        
-        # Сохраняем пользователя в БД
+        # Водитель не найден, сохраняем пользователя и предлагаем выбрать категорию позже
         referrer_id = user_data[user_id].get("referrer_id")
         user_info = user_data[user_id]["user_info"]
-        phone_number = user_data[user_id].get("phone_number")
-        
         db.add_user(
             user_id=user_info["id"],
             username=user_info["username"],
             full_name=user_info["full_name"],
             first_name=user_info["first_name"],
-            phone_number=phone_number,
-            category=category,
+            phone_number=cleaned_phone,
+            category=None,
             referrer_id=referrer_id,
             is_registered_in_park=False
         )
-        
-        # Отмечаем, что пользователь зарегистрирован
-        user_data[user_id]["registered"] = True
-        
-        # Отправляем уведомление в канал
-        await send_notification_to_channel(user_id, message.bot)
-        
-        # Отправляем информацию о реферальной программе
-        referral_text = (
-            f"💰 <b>Зарабатывайте с нами!</b>\n\n"
-            f"Приглашайте друзей и получайте бонусы:\n"
-            f"• <b>1000 руб</b> — вам за каждого приглашённого\n"
-            f"• <b>500 руб</b> — вашему другу\n\n"
-            f"📋 <b>Условие выплаты:</b>\n"
-            f"При выполнении 45 заказов в тарифе «Экспресс» и 30 заказов в тарифе «Грузовой», Вы и Ваш друг получаете бонус.\n\n"
-            f"Используйте кнопку <b>\"👥 Пригласить друзей\"</b> для получения вашей реферальной ссылки!"
+        await checking_msg.edit_text(
+            "📋 <b>Вы ещё не зарегистрированы в Яндекс Парке</b>\n\n"
+            "Нажмите «🚀 Начать работать» и выберите категорию. Менеджер свяжется с вами в ближайшее время.",
+            parse_mode="HTML"
         )
-        
-        # Отправляем пользователю ссылки на формы
-        await message.answer(
-            "📝 <b>Откройте нужную форму заявки на подключение:</b>",
-            parse_mode="HTML",
-            reply_markup=get_form_links_keyboard()
-        )
-        
-        # Показываем главное меню
+        # Показываем главное меню сразу, чтобы были видны кнопки
         is_admin = db.is_admin(user_id)
         await message.answer(
-            referral_text,
-            parse_mode="HTML",
+            "Главное меню:",
             reply_markup=get_main_menu_keyboard(is_admin)
         )
-        
-        # Очищаем данные пользователя
+        # Очищаем временные данные и завершаем FSM
         user_data.pop(user_id, None)
         await state.finish()
 
 
-async def send_notification_to_channel(user_id: int, bot: Bot):
-    """Отправляет уведомление в канал с фото и информацией о пользователе"""
+@dp.message_handler(lambda message: message.text == "🚀 Начать работать", state="*")
+async def start_work_flow(message: types.Message, state: FSMContext):
+    """Запуск выбора категории для подключения"""
+    user_id = message.from_user.id
+    user = db.get_user(user_id)
+    if not user or not user.get("phone_number"):
+        await message.answer("Сначала отправьте номер телефона через /start.")
+        return
+    if user and user.get("is_registered_in_park"):
+        await message.answer("Вы уже зарегистрированы в Яндекс Парке.")
+        return
+    # Готовим данные в user_data (для referrer/username)
+    if user_id not in user_data:
+        user_data[user_id] = {
+            "category": None,
+            "phone_number": user.get("phone_number") if user else None,
+            "referrer_id": user.get("referrer_id") if user else None,
+            "user_info": {
+                "id": user_id,
+                "username": user.get("username") if user else message.from_user.username,
+                "full_name": user.get("full_name") if user else message.from_user.full_name,
+                "first_name": user.get("first_name") if user else message.from_user.first_name,
+            }
+        }
+    await message.answer(
+        "Выберите вашу категорию:",
+        reply_markup=get_category_keyboard()
+    )
+    await RegistrationStates.waiting_for_category.set()
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("category:"), state=RegistrationStates.waiting_for_category)
+async def process_category_selection(callback_query: types.CallbackQuery, state: FSMContext):
+    """Обработчик выбора категории без загрузки документов"""
+    await callback_query.answer()
+    
+    user_id = callback_query.from_user.id
+    category = callback_query.data.split(":")[1]
+    
+    # Обновляем данные и БД
+    if user_id not in user_data:
+        user_data[user_id] = {"user_info": {"id": user_id, "username": callback_query.from_user.username,
+                                            "full_name": callback_query.from_user.full_name,
+                                            "first_name": callback_query.from_user.first_name}}
+    user_data[user_id]["category"] = category
+    
+    # Обновляем категорию в БД (если запись уже есть после ввода телефона)
+    conn = db.get_connection()
+    cur = conn.cursor()
     try:
-        user_info = user_data[user_id]["user_info"]
-        category = user_data[user_id]["category"]
-        photos = user_data[user_id]["photos"]
-        referrer_id = user_data[user_id].get("referrer_id")
-        phone_number = user_data[user_id].get("phone_number", "не указан")
-        
-        category_info = DOCUMENT_REQUIREMENTS[category]
-        
-        # Формируем текст уведомления
-        notification_text = (
-            f"🆕 <b>Новая регистрация!</b>\n\n"
-            f"{category_info['emoji']} <b>Категория:</b> {category_info['name']}\n\n"
-            f"👤 <b>Пользователь:</b> {user_info['full_name']}\n"
-            f"🆔 <b>Username:</b> @{user_info['username'] if user_info['username'] else 'не указан'}\n"
-            f"📱 <b>Телефон:</b> {phone_number}\n"
-        )
-        
-        # Добавляем информацию о реферере
-        if referrer_id:
-            referrer = db.get_user(referrer_id)
+        cur.execute("UPDATE users SET category = ? WHERE user_id = ?", (category, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+    
+    # Отправляем уведомление в канал
+    await send_notification_to_channel_simple(user_id, category, callback_query.bot)
+    
+    await callback_query.message.edit_text(
+        "✅ Ваша заявка принята. Менеджер свяжется с вами в ближайшее время.",
+        parse_mode="HTML"
+    )
+    
+    # Чистим состояние
+    user_data.pop(user_id, None)
+    await state.finish()
+
+
+async def send_notification_to_channel_simple(user_id: int, category: str, bot: Bot):
+    """Отправляет текстовое уведомление в канал о новой заявке без фотографий"""
+    try:
+        user = db.get_user(user_id)
+        cat = DOCUMENT_REQUIREMENTS.get(category, {})
+        referrer_text = ""
+        if user and user.get("referrer_id"):
+            referrer = db.get_user(user.get("referrer_id"))
             if referrer:
-                notification_text += f"\n👥 <b>Приглашён пользователем:</b> {referrer['full_name']}\n"
-                notification_text += f"📱 <b>Username реферера:</b> @{referrer['username'] if referrer['username'] else 'не указан'}"
+                ref_username = referrer.get("username")
+                ref_link = f"@{ref_username}" if ref_username else f'<a href="tg://user?id={referrer.get("user_id")}">профиль</a>'
+                referrer_text = (
+                    f"\n👥 Пригласил: {referrer.get('full_name')} "
+                    f"({ref_link})"
+                )
         
-        notification_text += f"\n\n📄 <b>Документы:</b> {len(photos)} фото"
+        if user and user.get("username"):
+            username_link = f"@{user.get('username')}"
+        else:
+            # Кликабельная ссылка на профиль, если username отсутствует
+            username_link = f'<a href="tg://user?id={user_id}">профиль</a>'
         
-        # Формируем медиа группу
-        media = []
-        for i, photo_id in enumerate(photos):
-            if i == 0:
-                media.append(types.InputMediaPhoto(
-                    media=photo_id,
-                    caption=notification_text,
-                    parse_mode="HTML"
-                ))
-            else:
-                media.append(types.InputMediaPhoto(media=photo_id))
+        phone = user.get("phone_number") if user else "не указан"
+        full_name = user.get("full_name") if user else "Не указано"
         
-        # Отправляем медиа группу
-        await bot.send_media_group(
-            chat_id=NOTIFICATION_CHANNEL_ID,
-            media=media
+        text = (
+            "🆕 <b>Новая заявка</b>\n\n"
+            f"{cat.get('emoji', '📌')} Категория: {cat.get('name', category)}\n"
+            f"👤 Имя: {full_name}\n"
+            f"🔗 Telegram: {username_link}\n"
+            f"📱 Телефон: {phone}"
+            f"{referrer_text}"
         )
         
-        logging.info(f"Уведомление для пользователя {user_id} успешно отправлено в канал")
-        
+        await bot.send_message(
+            chat_id=NOTIFICATION_CHANNEL_ID,
+            text=text,
+            parse_mode="HTML"
+        )
+        logging.info(f"Уведомление для пользователя {user_id} отправлено в канал без фото")
     except Exception as e:
         logging.error(f"Ошибка при отправке уведомления в канал: {e}")
 
@@ -504,6 +464,8 @@ async def show_referral_link(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     bot_info = await bot.get_me()
     referral_link = f"https://t.me/{bot_info.username}?start=ref_{user_id}"
+    # Добавляем zero-width space, чтобы ссылка не автокликалась и её было удобно копировать
+    copy_safe_link = referral_link.replace("https://", "https://\u2060")
     
     user = db.get_user(user_id)
     if not user:
@@ -513,16 +475,11 @@ async def show_referral_link(message: types.Message, state: FSMContext):
     stats = db.get_user_stats(user_id)
     
     referral_text = (
-        f"🔗 <b>Ваша реферальная ссылка:</b>\n"
-        f"<code>{referral_link}</code>\n\n"
-        f"📊 <b>Статистика:</b>\n"
+        "🔗 <b>Ваша реферальная ссылка:</b>\n"
+        f"{copy_safe_link}\n\n"
         f"👥 Приглашено: {stats['invited_count']}\n\n"
-        f"💰 <b>Бонусы:</b>\n"
-        f"• 1000 руб — вам\n"
-        f"• 500 руб — другу\n\n"
-        f"📋 <b>Условие выплаты:</b>\n"
-        f"При выполнении 45 заказов в тарифе «Экспресс» и 30 заказов в тарифе «Грузовой», Вы и Ваш друг получаете бонус.\n\n"
-        f"Отправьте ссылку своим друзьям!"
+        "💰 Бонусы: 1000 руб вам / 500 руб другу\n"
+        "Условие: 45 заказов (экспресс) или 30 (грузовой)."
     )
     
     await message.answer(referral_text, parse_mode="HTML")
@@ -709,13 +666,11 @@ async def admin_process_search_phone(message: types.Message, state: FSMContext):
         )
         return
         
-    # Формируем отчет
-    report_text = f"📝 <b>Отчет по номеру:</b> <code>{normalized_phone}</code>\n\n"
+    # Формируем компактный отчет
+    parts = [f"📝 <b>Отчет по номеру:</b> <code>{normalized_phone}</code>"]
     
     # --- Данные из Яндекс Парка ---
     if driver_in_park and driver_in_park.get("found"):
-        report_text += "<b><u>Данные из Яндекс Парка</u></b>\n"
-        
         name_parts = [
             driver_in_park.get('last_name'),
             driver_in_park.get('first_name'),
@@ -729,103 +684,90 @@ async def admin_process_search_phone(message: types.Message, state: FSMContext):
         }
         status = status_map.get(driver_in_park.get('work_status'), "-")
         
-        report_text += f"👤 <b>ФИО:</b> {driver_name}\n"
-        report_text += f"📊 <b>Статус:</b> {status}\n"
-        
-        if driver_in_park.get("balance") is not None:
-            report_text += f"💰 <b>Баланс:</b> {driver_in_park.get('balance')} руб.\n"
-        
-        # ПОЛУЧАЕМ ЗАКАЗЫ ИЗ API ПАРКА
         driver_id = driver_in_park.get("driver_id")
         orders_count = 0
         if driver_id:
             try:
                 logging.info(f"[ADMIN_SEARCH] Запрос заказов из парка для driver_id={driver_id}")
-                orders_count = await yandex_api.get_driver_orders_count(driver_id)
-                if orders_count is None:
-                    orders_count = 0
-                    logging.warning(f"[ADMIN_SEARCH] API вернул None для driver_id={driver_id}")
-                else:
-                    logging.info(f"[ADMIN_SEARCH] ✅ Получено {orders_count} заказов из API")
-                    
-                # Обновляем в БД если пользователь есть
-                if user_in_db:
-                    user_id = user_in_db.get('user_id')
-                    if user_id:
-                        db.update_orders_count(user_id, orders_count)
+                orders_count = await yandex_api.get_driver_orders_count(driver_id) or 0
+                if user_in_db and user_in_db.get('user_id'):
+                    db.update_orders_count(user_in_db['user_id'], orders_count)
             except Exception as e:
                 logging.error(f"[ADMIN_SEARCH] ❌ Ошибка получения заказов: {e}", exc_info=True)
-        else:
-            logging.warning(f"[ADMIN_SEARCH] driver_id отсутствует в ответе API парка")
         
-        report_text += f"📈 <b>Выполнено заказов:</b> {orders_count}\n"
-        report_text += "\n"
+        park_block = [
+            f"👤 ФИО: {driver_name}",
+            f"📊 Статус: {status}",
+            f"📈 Выполнено заказов: {orders_count}"
+        ]
+        parts.append("\n".join(park_block))
+    else:
+        parts.append("❔ В Яндекс Парке не найден")
 
     # --- Данные из Бота ---
     if user_in_db:
-        report_text += "<b><u>Данные из бота</u></b>\n"
-        report_text += f"👤 <b>Имя в Telegram:</b> {user_in_db.get('full_name')}\n"
-        # Убрали Telegram ID
+        bot_lines = [f"👤 Имя в Telegram: {user_in_db.get('full_name')}"]
         if user_in_db.get('username'):
-            report_text += f"📱 <b>Username:</b> @{user_in_db.get('username')}\n"
-        
-        if user_in_db.get('referrer_id'):
-            referrer = db.get_user(user_in_db.get('referrer_id'))
-            if referrer:
-                # Убрали ID реферера
-                report_text += f"👥 <b>Приглашен:</b> {referrer.get('full_name')}\n"
-        
-        report_text += "\n"
+            bot_lines.append(f"📱 Username: @{user_in_db.get('username')}")
+        if user_in_db.get('phone_number'):
+            bot_lines.append(f"📞 Телефон: {user_in_db.get('phone_number')}")
+        # Показываем, кто пригласил (ищем в users.referrer_id, а при отсутствии — в referrals)
+        referrer_id = user_in_db.get('referrer_id')
+        if not referrer_id:
+            try:
+                conn = db.get_connection()
+                cur = conn.cursor()
+                cur.execute("SELECT referrer_id FROM referrals WHERE referred_id = ? LIMIT 1", (user_in_db.get('user_id'),))
+                row = cur.fetchone()
+                if row and row[0]:
+                    referrer_id = row[0]
+            except Exception as e:
+                logging.error(f"Ошибка при поиске referrer_id в referrals: {e}")
+            finally:
+                try:
+                    conn.close()
+                except:
+                    pass
+        if referrer_id:
+            ref = db.get_user(referrer_id)
+            if ref:
+                ref_username = ref.get('username')
+                ref_phone = ref.get('phone_number') or 'не указан'
+                ref_link = f"@{ref_username}" if ref_username else f'<a href="tg://user?id={ref.get("user_id")}">профиль</a>'
+                bot_lines.append("")  # пустая строка для визуального разделения
+                bot_lines.append("👥 Пользователя пригласил:")
+                bot_lines.append(f"👤 Имя в Telegram: {ref.get('full_name')}")
+                bot_lines.append(f"📱 Username: {ref_link}")
+                bot_lines.append(f"📞 Телефон: {ref_phone}")
+        parts.append("\n".join(bot_lines))
         
         # --- Приглашенные им пользователи ---
         try:
-            user_id_for_search = user_in_db.get('user_id')
-            logging.info(f"Searching for invited users by referrer_id: {user_id_for_search}")
-            
-            invited_users = db.get_invited_users_with_order_count(user_id_for_search)
-            logging.info(f"Function returned: {invited_users}, type: {type(invited_users)}, length: {len(invited_users) if invited_users else 0}")
-            
-            # Всегда показываем раздел "Приглашенные им"
-            report_text += f"<b><u>Приглашенные им:</u></b>\n"
-            
-            if invited_users and len(invited_users) > 0:
-                report_text += f"<i>(найдено: {len(invited_users)})</i>\n"
-                for i, ref in enumerate(invited_users, 1):
-                    phone_display = ref.get('phone_number') if ref.get('phone_number') else 'не указан'
-                    
-                    # Получаем актуальные заказы из API для каждого приглашенного
-                    orders_count = 0
-                    ref_phone = ref.get('phone_number')
-                    if ref_phone:
-                        try:
-                            # Ищем driver_id через API парка
-                            ref_driver_info = await yandex_api.check_driver_by_phone(ref_phone)
-                            if ref_driver_info and ref_driver_info.get("found"):
-                                ref_driver_id = ref_driver_info.get("driver_id")
-                                if ref_driver_id:
-                                    orders_count = await yandex_api.get_driver_orders_count(ref_driver_id)
-                                    if orders_count is None:
-                                        orders_count = 0
-                                    logging.info(f"[ADMIN_SEARCH] Приглашенный {ref.get('full_name')}: {orders_count} заказов")
-                        except Exception as e:
-                            logging.error(f"[ADMIN_SEARCH] Ошибка получения заказов для приглашенного {ref_phone}: {e}")
-                    
-                    report_text += (
-                        f"{i}. {ref.get('full_name')} (@{ref.get('username', '-')})\n"
-                        f"   - 📱 {phone_display}\n"
-                        f"   - 📈 Заказов: {orders_count}\n"
+            invited_users = db.get_invited_users_with_order_count(user_in_db['user_id'])
+            if invited_users:
+                invite_blocks = []
+                for ref in invited_users:
+                    uname = ref.get('username')
+                    uname_txt = f"@{uname}" if uname else "нет username"
+                    phone_display = ref.get('phone_number') or 'не указан'
+                    invite_blocks.append(
+                        "\n".join([
+                            f"👤 Имя в Telegram: {ref.get('full_name')}",
+                            f"📱 Username: {uname_txt}",
+                            f"📞 Телефон: {phone_display}",
+                            f"📈 Заказов: {ref.get('orders_count',0)}",
+                        ])
                     )
-                report_text += "\n"
+                parts.append("Приглашенные им:\n\n" + "\n\n".join(invite_blocks))
             else:
-                report_text += "ℹ️ <i>Пользователь никого не пригласил</i>\n\n"
+                parts.append("Приглашенные им:\n— нет данных")
         except Exception as e:
             logging.error(f"Ошибка при получении приглашенных пользователей: {e}", exc_info=True)
-            report_text += f"❌ <i>Ошибка при получении данных: {str(e)}</i>\n\n"
+            parts.append("Приглашенные им: ошибка получения данных")
     elif driver_in_park and driver_in_park.get("found"):
-        # Водитель найден в парке, но не в боте
-        report_text += "<b><u>Данные из бота</u></b>\n"
-        report_text += "ℹ️ <i>Пользователь не зарегистрирован в боте</i>\n"
-        report_text += "<i>(Зарегистрирован напрямую в Яндекс Парке)</i>\n\n"
+        parts.append("ℹ️ В боте не зарегистрирован (но есть в парке)")
+
+    report_text = "\n\n".join(parts)
 
     try:
         await message.answer(report_text, parse_mode="HTML", reply_markup=get_admin_keyboard())
